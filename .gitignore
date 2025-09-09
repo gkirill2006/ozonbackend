@@ -1,0 +1,89 @@
+# OS/macOS
+.DS_Store
+Thumbs.db
+.AppleDouble
+.LSOverride
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+*.so
+.venv/
+venv/
+ENV/
+env/
+build/
+dist/
+.eggs/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.cache/
+.coverage
+.coverage.*
+pip-wheel-metadata/
+.ipynb_checkpoints/
+
+# IDE/editors
+.vscode/
+.idea/
+*.iml
+
+# Logs
+*.log
+log/
+logs/
+
+# Docker/local services
+docker-data/
+*.pid
+
+# Environment files
+.env
+.env.*
+*.env
+*.local
+!.env.example
+
+# Credentials and keys (generic)
+*.pem
+*.key
+*.p12
+*.pfx
+*.der
+*.crt
+*.cer
+*.jks
+*.keystore
+*credentials*.json
+*credential*.json
+*secret*.json
+*.secrets.json
+*.token
+*.tokens
+*.auth
+*.rsa
+*id_rsa*
+*id_dsa*
+ssh/known_hosts
+
+# Node (just in case)
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# SQLite/DB
+db.sqlite3
+*.sqlite3
+
+# Swap/backup
+*.swp
+*.swo
+*.bak
+*.orig
+
+# Project-specific sensitive files
+ozon-469708-c5f1eca77c02.json
