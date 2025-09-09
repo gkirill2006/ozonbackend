@@ -1789,13 +1789,17 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None):
                 # Формируем название кампании с датой для колонки C
                 campaign_name_with_date = f"{campaign_name} {_dt.now().strftime('%d/%m/%y')}"
                 
-                # Добавляем в out_rows с пустыми бюджетами
+                # Бюджеты кампании: неделя/день (если не заданы — 0)
+                manual_week_budget_val = float(campaign.week_budget or 0)
+                manual_day_budget_val = float(campaign.daily_budget or 0)
+
+                # Добавляем в out_rows с бюджетом кампании в колонке J (дневной)
                 out_rows.append([
                     product_name,  # F: Название товара (артикул)
                     int(sku),     # G: SKU товара
-                    0.0,          # H: Недельный бюджет (пустой для существующих кампаний)
-                    0.0,          # I: Недельный бюджет ручной кампании (пустой)
-                    0.0,          # J: Дневной бюджет (пустой для существующих кампаний)
+                    0.0,                      # H: Недельный бюджет (не распределяем для существующих кампаний)
+                    manual_week_budget_val,   # I: Недельный бюджет ручной кампании
+                    manual_day_budget_val,    # J: Дневной бюджет кампании (требование)
                 ])
                 
                 # Добавляем в campaign_names
