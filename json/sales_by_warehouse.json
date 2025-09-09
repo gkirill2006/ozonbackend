@@ -1,0 +1,2571 @@
+{
+  "343116252": {
+    "salesByWarehouse": {
+      "Коледино": 22,
+      "Краснодар": 7,
+      "Невинномысск": 1,
+      "Тула": 1
+    },
+    "totalSales": 31,
+    "totalRevenue": 50147,
+    "avgDailySales": 1.03
+  },
+  "267579590": {
+    "salesByWarehouse": {
+      "Коледино": 28,
+      "Электросталь": 3,
+      "Краснодар": 14,
+      "Тула": 7,
+      "Невинномысск": 10,
+      "СЦ Шушары Московское шоссе": 2
+    },
+    "totalSales": 64,
+    "totalRevenue": 21514,
+    "avgDailySales": 2.13
+  },
+  "259552745": {
+    "salesByWarehouse": {
+      "Краснодар": 3,
+      "Коледино": 11,
+      "Казань": 1,
+      "Невинномысск": 3,
+      "Тула": 5
+    },
+    "totalSales": 23,
+    "totalRevenue": 5891,
+    "avgDailySales": 0.77
+  },
+  "327441498": {
+    "salesByWarehouse": {
+      "Коледино": 13,
+      "Тула": 2,
+      "Невинномысск": 1,
+      "Электросталь": 1,
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 18,
+    "totalRevenue": 7905,
+    "avgDailySales": 0.6
+  },
+  "306946226": {
+    "salesByWarehouse": {
+      "Коледино": 10,
+      "Краснодар": 2,
+      "Электросталь": 3,
+      "СЦ Шушары Московское шоссе": 4,
+      "Невинномысск": 6,
+      "Тула": 2
+    },
+    "totalSales": 27,
+    "totalRevenue": 9429,
+    "avgDailySales": 0.9
+  },
+  "318063556": {
+    "salesByWarehouse": {
+      "Коледино": 16,
+      "Краснодар": 14,
+      "СЦ Шушары Московское шоссе": 2,
+      "Электросталь": 2,
+      "Невинномысск": 7,
+      "Тула": 5
+    },
+    "totalSales": 46,
+    "totalRevenue": 131641,
+    "avgDailySales": 1.53
+  },
+  "252668661": {
+    "salesByWarehouse": {
+      "Коледино": 14,
+      "СЦ Шушары Московское шоссе": 4,
+      "Краснодар": 1,
+      "Казань": 1
+    },
+    "totalSales": 20,
+    "totalRevenue": 115686,
+    "avgDailySales": 0.67
+  },
+  "310978353": {
+    "salesByWarehouse": {
+      "Краснодар": 37,
+      "Электросталь": 3,
+      "Коледино": 134,
+      "Тула": 4,
+      "СЦ Шушары Московское шоссе": 21,
+      "Рязань (Тюшевское)": 2,
+      "Невинномысск": 32,
+      "Казань": 3,
+      "Санкт-Петербург Уткина Заводь": 1,
+      "Новосибирск": 1
+    },
+    "totalSales": 238,
+    "totalRevenue": 83655,
+    "avgDailySales": 7.93
+  },
+  "364825272": {
+    "salesByWarehouse": {
+      "Коледино": 7
+    },
+    "totalSales": 7,
+    "totalRevenue": 2210,
+    "avgDailySales": 0.23
+  },
+  "364875421": {
+    "salesByWarehouse": {
+      "Коледино": 6,
+      "Краснодар": 1
+    },
+    "totalSales": 7,
+    "totalRevenue": 2003,
+    "avgDailySales": 0.23
+  },
+  "401993909": {
+    "salesByWarehouse": {
+      "Невинномысск": 10,
+      "Коледино": 25,
+      "СЦ Шушары Московское шоссе": 2,
+      "Тула": 2
+    },
+    "totalSales": 39,
+    "totalRevenue": 12257,
+    "avgDailySales": 1.3
+  },
+  "314970475": {
+    "salesByWarehouse": {
+      "Тула": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 1073,
+    "avgDailySales": 0.03
+  },
+  "296313403": {
+    "salesByWarehouse": {
+      "Невинномысск": 2,
+      "Коледино": 5,
+      "Тула": 6,
+      "Электросталь": 1,
+      "Краснодар": 2
+    },
+    "totalSales": 16,
+    "totalRevenue": 6047,
+    "avgDailySales": 0.53
+  },
+  "298668868": {
+    "salesByWarehouse": {
+      "Коледино": 16,
+      "Краснодар": 5,
+      "Невинномысск": 10,
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 32,
+    "totalRevenue": 12335,
+    "avgDailySales": 1.07
+  },
+  "342143604": {
+    "salesByWarehouse": {
+      "Коледино": 6,
+      "Краснодар": 1,
+      "Электросталь": 1
+    },
+    "totalSales": 8,
+    "totalRevenue": 6303,
+    "avgDailySales": 0.27
+  },
+  "262515377": {
+    "salesByWarehouse": {
+      "Самара (Новосемейкино)": 1,
+      "Краснодар": 46,
+      "Невинномысск": 13,
+      "Коледино": 47,
+      "Тула": 1,
+      "СЦ Шушары Московское шоссе": 6,
+      "Электросталь": 2,
+      "Екатеринбург - Испытателей 14г": 1
+    },
+    "totalSales": 117,
+    "totalRevenue": 51517,
+    "avgDailySales": 3.9
+  },
+  "267580481": {
+    "salesByWarehouse": {
+      "Коледино": 9,
+      "Краснодар": 2,
+      "Невинномысск": 6,
+      "Электросталь": 1,
+      "Тула": 5
+    },
+    "totalSales": 23,
+    "totalRevenue": 12235,
+    "avgDailySales": 0.77
+  },
+  "363356321": {
+    "salesByWarehouse": {
+      "Коледино": 4,
+      "Краснодар": 4
+    },
+    "totalSales": 8,
+    "totalRevenue": 2828,
+    "avgDailySales": 0.27
+  },
+  "360824297": {
+    "salesByWarehouse": {
+      "Коледино": 44,
+      "СЦ Шушары Московское шоссе": 5,
+      "Электросталь": 3,
+      "Казань": 2,
+      "Невинномысск": 1
+    },
+    "totalSales": 55,
+    "totalRevenue": 16031,
+    "avgDailySales": 1.83
+  },
+  "391033287": {
+    "salesByWarehouse": {
+      "Коледино": 3,
+      "Тула": 1
+    },
+    "totalSales": 4,
+    "totalRevenue": 1084,
+    "avgDailySales": 0.13
+  },
+  "328124841": {
+    "salesByWarehouse": {
+      "Коледино": 29,
+      "Электросталь": 1,
+      "СЦ Шушары Московское шоссе": 3,
+      "Краснодар": 1
+    },
+    "totalSales": 34,
+    "totalRevenue": 7076,
+    "avgDailySales": 1.13
+  },
+  "298670110": {
+    "salesByWarehouse": {
+      "Коледино": 14,
+      "Невинномысск": 1,
+      "Тула": 3,
+      "Электросталь": 1
+    },
+    "totalSales": 19,
+    "totalRevenue": 5799,
+    "avgDailySales": 0.63
+  },
+  "289140846": {
+    "salesByWarehouse": {
+      "Коледино": 14
+    },
+    "totalSales": 14,
+    "totalRevenue": 18709,
+    "avgDailySales": 0.47
+  },
+  "366017435": {
+    "salesByWarehouse": {
+      "Коледино": 35,
+      "СЦ Шушары Московское шоссе": 11,
+      "Электросталь": 1
+    },
+    "totalSales": 47,
+    "totalRevenue": 19153,
+    "avgDailySales": 1.57
+  },
+  "360779297": {
+    "salesByWarehouse": {
+      "Коледино": 33,
+      "Санкт-Петербург Уткина Заводь": 3,
+      "СЦ Шушары Московское шоссе": 2,
+      "Электросталь": 2,
+      "Астана Карагандинское шоссе": 1
+    },
+    "totalSales": 41,
+    "totalRevenue": 11973,
+    "avgDailySales": 1.37
+  },
+  "329789433": {
+    "salesByWarehouse": {
+      "Коледино": 11,
+      "Краснодар": 5,
+      "Невинномысск": 7,
+      "Тула": 1,
+      "СЦ Шушары Московское шоссе": 3
+    },
+    "totalSales": 27,
+    "totalRevenue": 10132,
+    "avgDailySales": 0.9
+  },
+  "278939830": {
+    "salesByWarehouse": {
+      "Краснодар": 1,
+      "СЦ Шушары Московское шоссе": 11,
+      "Тула": 7,
+      "Коледино": 20,
+      "Электросталь": 2,
+      "Рязань (Тюшевское)": 1
+    },
+    "totalSales": 42,
+    "totalRevenue": 8411,
+    "avgDailySales": 1.4
+  },
+  "291729030": {
+    "salesByWarehouse": {
+      "Коледино": 4,
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 5,
+    "totalRevenue": 1723,
+    "avgDailySales": 0.17
+  },
+  "289410249": {
+    "salesByWarehouse": {
+      "Коледино": 32,
+      "Тула": 7,
+      "СЦ Шушары Московское шоссе": 5
+    },
+    "totalSales": 44,
+    "totalRevenue": 17128,
+    "avgDailySales": 1.47
+  },
+  "278943808": {
+    "salesByWarehouse": {
+      "Коледино": 9,
+      "СЦ Шушары Московское шоссе": 3
+    },
+    "totalSales": 12,
+    "totalRevenue": 4425,
+    "avgDailySales": 0.4
+  },
+  "299468213": {
+    "salesByWarehouse": {
+      "СЦ Шушары Московское шоссе": 6,
+      "Коледино": 44,
+      "Электросталь": 1,
+      "Белые Столбы": 1,
+      "Тула": 8,
+      "Казань": 1
+    },
+    "totalSales": 61,
+    "totalRevenue": 22262,
+    "avgDailySales": 2.03
+  },
+  "418151980": {
+    "salesByWarehouse": {
+      "Коледино": 30,
+      "Невинномысск": 1,
+      "СЦ Шушары Московское шоссе": 2,
+      "Краснодар": 1
+    },
+    "totalSales": 34,
+    "totalRevenue": 11134,
+    "avgDailySales": 1.13
+  },
+  "414404340": {
+    "salesByWarehouse": {
+      "Коледино": 2
+    },
+    "totalSales": 2,
+    "totalRevenue": 2107,
+    "avgDailySales": 0.07
+  },
+  "370534696": {
+    "salesByWarehouse": {
+      "Коледино": 3
+    },
+    "totalSales": 3,
+    "totalRevenue": 3198,
+    "avgDailySales": 0.1
+  },
+  "364812147": {
+    "salesByWarehouse": {
+      "Коледино": 5,
+      "Казань": 1,
+      "СЦ Шушары Московское шоссе": 1,
+      "Тула": 3
+    },
+    "totalSales": 10,
+    "totalRevenue": 2686,
+    "avgDailySales": 0.33
+  },
+  "263421351": {
+    "salesByWarehouse": {
+      "Коледино": 14,
+      "СЦ Шушары Московское шоссе": 3
+    },
+    "totalSales": 17,
+    "totalRevenue": 3406,
+    "avgDailySales": 0.57
+  },
+  "328124840": {
+    "salesByWarehouse": {
+      "Коледино": 7
+    },
+    "totalSales": 7,
+    "totalRevenue": 1435,
+    "avgDailySales": 0.23
+  },
+  "299445206": {
+    "salesByWarehouse": {
+      "СЦ Шушары Московское шоссе": 3,
+      "Коледино": 2
+    },
+    "totalSales": 5,
+    "totalRevenue": 1832,
+    "avgDailySales": 0.17
+  },
+  "263448119": {
+    "salesByWarehouse": {
+      "Коледино": 5
+    },
+    "totalSales": 5,
+    "totalRevenue": 1368,
+    "avgDailySales": 0.17
+  },
+  "371817122": {
+    "salesByWarehouse": {
+      "Коледино": 9,
+      "Краснодар": 1,
+      "Казань": 1,
+      "Электросталь": 1
+    },
+    "totalSales": 12,
+    "totalRevenue": 2580,
+    "avgDailySales": 0.4
+  },
+  "252672005": {
+    "salesByWarehouse": {
+      "СЦ Шушары Московское шоссе": 1,
+      "Коледино": 1
+    },
+    "totalSales": 2,
+    "totalRevenue": 1858,
+    "avgDailySales": 0.07
+  },
+  "412193566": {
+    "salesByWarehouse": {
+      "Коледино": 47,
+      "СЦ Шушары Московское шоссе": 4,
+      "Тула": 5,
+      "Волгоград": 1
+    },
+    "totalSales": 57,
+    "totalRevenue": 31440,
+    "avgDailySales": 1.9
+  },
+  "256342867": {
+    "salesByWarehouse": {
+      "Краснодар": 6,
+      "Коледино": 4,
+      "Невинномысск": 10,
+      "Тула": 3,
+      "Электросталь": 1
+    },
+    "totalSales": 24,
+    "totalRevenue": 9760,
+    "avgDailySales": 0.8
+  },
+  "327383890": {
+    "salesByWarehouse": {
+      "Коледино": 13,
+      "Краснодар": 1
+    },
+    "totalSales": 14,
+    "totalRevenue": 4770,
+    "avgDailySales": 0.47
+  },
+  "305240118": {
+    "salesByWarehouse": {
+      "Коледино": 2,
+      "Невинномысск": 2,
+      "Краснодар": 4,
+      "Тула": 1
+    },
+    "totalSales": 9,
+    "totalRevenue": 7243,
+    "avgDailySales": 0.3
+  },
+  "257053679": {
+    "salesByWarehouse": {
+      "Коледино": 7
+    },
+    "totalSales": 7,
+    "totalRevenue": 2463,
+    "avgDailySales": 0.23
+  },
+  "368722831": {
+    "salesByWarehouse": {
+      "Коледино": 4,
+      "Котовск": 1,
+      "Тула": 1
+    },
+    "totalSales": 6,
+    "totalRevenue": 3028,
+    "avgDailySales": 0.2
+  },
+  "318294831": {
+    "salesByWarehouse": {
+      "Коледино": 6,
+      "Электросталь": 1,
+      "Краснодар": 1
+    },
+    "totalSales": 8,
+    "totalRevenue": 2636,
+    "avgDailySales": 0.27
+  },
+  "372262943": {
+    "salesByWarehouse": {
+      "Коледино": 4
+    },
+    "totalSales": 4,
+    "totalRevenue": 4777,
+    "avgDailySales": 0.13
+  },
+  "320405458": {
+    "salesByWarehouse": {
+      "Коледино": 12,
+      "Виртуальный Оренбург": 1,
+      "Электросталь": 2,
+      "Краснодар": 1,
+      "Тула": 1,
+      "СЦ Шушары Московское шоссе": 2
+    },
+    "totalSales": 19,
+    "totalRevenue": 5112,
+    "avgDailySales": 0.63
+  },
+  "263372348": {
+    "salesByWarehouse": {
+      "Коледино": 2,
+      "Астана Карагандинское шоссе": 1,
+      "Краснодар": 1
+    },
+    "totalSales": 4,
+    "totalRevenue": 1830,
+    "avgDailySales": 0.13
+  },
+  "318064175": {
+    "salesByWarehouse": {
+      "Коледино": 6,
+      "Тула": 5,
+      "Электросталь": 3,
+      "Краснодар": 1
+    },
+    "totalSales": 15,
+    "totalRevenue": 51336,
+    "avgDailySales": 0.5
+  },
+  "315156019": {
+    "salesByWarehouse": {
+      "Коледино": 11,
+      "Краснодар": 1,
+      "Невинномысск": 1
+    },
+    "totalSales": 13,
+    "totalRevenue": 22523,
+    "avgDailySales": 0.43
+  },
+  "300346302": {
+    "salesByWarehouse": {
+      "Коледино": 15,
+      "Виртуальный Краснодар": 1,
+      "СЦ Шушары Московское шоссе": 2
+    },
+    "totalSales": 18,
+    "totalRevenue": 4853,
+    "avgDailySales": 0.6
+  },
+  "257122399": {
+    "salesByWarehouse": {
+      "Краснодар": 7,
+      "Коледино": 11,
+      "Электросталь": 1,
+      "Тула": 5,
+      "СЦ Шушары Московское шоссе": 2
+    },
+    "totalSales": 26,
+    "totalRevenue": 9442,
+    "avgDailySales": 0.87
+  },
+  "325121390": {
+    "salesByWarehouse": {
+      "Коледино": 3,
+      "СЦ Шушары Московское шоссе": 1,
+      "Невинномысск": 1
+    },
+    "totalSales": 5,
+    "totalRevenue": 1937,
+    "avgDailySales": 0.17
+  },
+  "327441496": {
+    "salesByWarehouse": {
+      "Тула": 5,
+      "Коледино": 14,
+      "Электросталь": 1
+    },
+    "totalSales": 20,
+    "totalRevenue": 8358,
+    "avgDailySales": 0.67
+  },
+  "324962156": {
+    "salesByWarehouse": {
+      "Коледино": 16,
+      "Невинномысск": 3,
+      "Краснодар": 1,
+      "Санкт-Петербург Уткина Заводь": 1,
+      "Тула": 7,
+      "Электросталь": 1
+    },
+    "totalSales": 29,
+    "totalRevenue": 14254,
+    "avgDailySales": 0.97
+  },
+  "327282724": {
+    "salesByWarehouse": {
+      "Коледино": 14,
+      "Краснодар": 5,
+      "Невинномысск": 3,
+      "СЦ Шушары Московское шоссе": 1,
+      "Тула": 3
+    },
+    "totalSales": 26,
+    "totalRevenue": 10485,
+    "avgDailySales": 0.87
+  },
+  "291860164": {
+    "salesByWarehouse": {
+      "Коледино": 11,
+      "Невинномысск": 3
+    },
+    "totalSales": 14,
+    "totalRevenue": 4042,
+    "avgDailySales": 0.47
+  },
+  "369566305": {
+    "salesByWarehouse": {
+      "Краснодар": 1,
+      "СЦ Шушары Московское шоссе": 3,
+      "Коледино": 3,
+      "Электросталь": 3
+    },
+    "totalSales": 10,
+    "totalRevenue": 7829,
+    "avgDailySales": 0.33
+  },
+  "298650657": {
+    "salesByWarehouse": {
+      "Коледино": 46,
+      "Краснодар": 2,
+      "Электросталь": 1,
+      "СЦ Шушары Московское шоссе": 4
+    },
+    "totalSales": 53,
+    "totalRevenue": 9723,
+    "avgDailySales": 1.77
+  },
+  "267414309": {
+    "salesByWarehouse": {
+      "Коледино": 2
+    },
+    "totalSales": 2,
+    "totalRevenue": 570,
+    "avgDailySales": 0.07
+  },
+  "299468212": {
+    "salesByWarehouse": {
+      "Краснодар": 8,
+      "Невинномысск": 9,
+      "Коледино": 80,
+      "СЦ Шушары Московское шоссе": 12,
+      "Виртуальный Краснодар": 1,
+      "Виртуальный Самара": 1,
+      "Тула": 5,
+      "Виртуальный Крым": 1
+    },
+    "totalSales": 117,
+    "totalRevenue": 42727,
+    "avgDailySales": 3.9
+  },
+  "388130734": {
+    "salesByWarehouse": {
+      "Коледино": 2,
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 3,
+    "totalRevenue": 1553,
+    "avgDailySales": 0.1
+  },
+  "364819489": {
+    "salesByWarehouse": {
+      "Коледино": 3,
+      "Невинномысск": 1,
+      "Краснодар": 1
+    },
+    "totalSales": 5,
+    "totalRevenue": 1379,
+    "avgDailySales": 0.17
+  },
+  "393772550": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 486,
+    "avgDailySales": 0.03
+  },
+  "262527669": {
+    "salesByWarehouse": {
+      "Коледино": 11,
+      "Краснодар": 1
+    },
+    "totalSales": 12,
+    "totalRevenue": 7840,
+    "avgDailySales": 0.4
+  },
+  "297308219": {
+    "salesByWarehouse": {
+      "Коледино": 5,
+      "Электросталь": 1,
+      "Краснодар": 1,
+      "Невинномысск": 1
+    },
+    "totalSales": 8,
+    "totalRevenue": 2808,
+    "avgDailySales": 0.27
+  },
+  "267427600": {
+    "salesByWarehouse": {
+      "Коледино": 4
+    },
+    "totalSales": 4,
+    "totalRevenue": 805,
+    "avgDailySales": 0.13
+  },
+  "298641016": {
+    "salesByWarehouse": {
+      "Коледино": 6,
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 7,
+    "totalRevenue": 1653,
+    "avgDailySales": 0.23
+  },
+  "298667701": {
+    "salesByWarehouse": {
+      "Коледино": 11,
+      "СЦ Шушары Московское шоссе": 2,
+      "Тула": 5,
+      "Краснодар": 2
+    },
+    "totalSales": 20,
+    "totalRevenue": 7048,
+    "avgDailySales": 0.67
+  },
+  "329842239": {
+    "salesByWarehouse": {
+      "Коледино": 1,
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 2,
+    "totalRevenue": 813,
+    "avgDailySales": 0.07
+  },
+  "436642642": {
+    "salesByWarehouse": {
+      "Коледино": 2,
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 3,
+    "totalRevenue": 3156,
+    "avgDailySales": 0.1
+  },
+  "298568110": {
+    "salesByWarehouse": {
+      "Коледино": 6,
+      "СЦ Шушары Московское шоссе": 2
+    },
+    "totalSales": 8,
+    "totalRevenue": 1728,
+    "avgDailySales": 0.27
+  },
+  "368722830": {
+    "salesByWarehouse": {
+      "Коледино": 6,
+      "Электросталь": 3,
+      "Тула": 2
+    },
+    "totalSales": 11,
+    "totalRevenue": 5464,
+    "avgDailySales": 0.37
+  },
+  "310265939": {
+    "salesByWarehouse": {
+      "Краснодар": 1,
+      "Коледино": 5,
+      "Владимир": 1
+    },
+    "totalSales": 7,
+    "totalRevenue": 3019,
+    "avgDailySales": 0.23
+  },
+  "370460509": {
+    "salesByWarehouse": {
+      "Коледино": 3
+    },
+    "totalSales": 3,
+    "totalRevenue": 4384,
+    "avgDailySales": 0.1
+  },
+  "300268529": {
+    "salesByWarehouse": {
+      "Виртуальный Краснодар": 1,
+      "Коледино": 10,
+      "Краснодар": 3,
+      "СЦ Шушары Московское шоссе": 3
+    },
+    "totalSales": 17,
+    "totalRevenue": 4890,
+    "avgDailySales": 0.57
+  },
+  "257096916": {
+    "salesByWarehouse": {
+      "Коледино": 10,
+      "Невинномысск": 5,
+      "Краснодар": 1
+    },
+    "totalSales": 16,
+    "totalRevenue": 31491,
+    "avgDailySales": 0.53
+  },
+  "257100627": {
+    "salesByWarehouse": {
+      "Коледино": 5,
+      "Электросталь": 1
+    },
+    "totalSales": 6,
+    "totalRevenue": 5775,
+    "avgDailySales": 0.2
+  },
+  "370503138": {
+    "salesByWarehouse": {
+      "Коледино": 4,
+      "Краснодар": 2
+    },
+    "totalSales": 6,
+    "totalRevenue": 4729,
+    "avgDailySales": 0.2
+  },
+  "388130735": {
+    "salesByWarehouse": {
+      "Электросталь": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 282,
+    "avgDailySales": 0.03
+  },
+  "398453788": {
+    "salesByWarehouse": {
+      "Электросталь": 1,
+      "Котовск": 1,
+      "Санкт-Петербург Уткина Заводь": 1,
+      "Тула": 3,
+      "Коледино": 1
+    },
+    "totalSales": 7,
+    "totalRevenue": 2157,
+    "avgDailySales": 0.23
+  },
+  "369584155": {
+    "salesByWarehouse": {
+      "Коледино": 4
+    },
+    "totalSales": 4,
+    "totalRevenue": 2488,
+    "avgDailySales": 0.13
+  },
+  "363317317": {
+    "salesByWarehouse": {
+      "Коледино": 10,
+      "СЦ Шушары Московское шоссе": 2
+    },
+    "totalSales": 12,
+    "totalRevenue": 16737,
+    "avgDailySales": 0.4
+  },
+  "369421596": {
+    "salesByWarehouse": {
+      "Коледино": 10,
+      "СЦ Шушары Московское шоссе": 2
+    },
+    "totalSales": 12,
+    "totalRevenue": 5157,
+    "avgDailySales": 0.4
+  },
+  "341600929": {
+    "salesByWarehouse": {
+      "Коледино": 2,
+      "Тула": 1
+    },
+    "totalSales": 3,
+    "totalRevenue": 1644,
+    "avgDailySales": 0.1
+  },
+  "438984589": {
+    "salesByWarehouse": {
+      "Коледино": 2
+    },
+    "totalSales": 2,
+    "totalRevenue": 3356,
+    "avgDailySales": 0.07
+  },
+  "372927148": {
+    "salesByWarehouse": {
+      "Коледино": 11,
+      "Краснодар": 2,
+      "Тула": 2,
+      "Рязань (Тюшевское)": 1
+    },
+    "totalSales": 16,
+    "totalRevenue": 5597,
+    "avgDailySales": 0.53
+  },
+  "399197964": {
+    "salesByWarehouse": {
+      "Коледино": 2
+    },
+    "totalSales": 2,
+    "totalRevenue": 1061,
+    "avgDailySales": 0.07
+  },
+  "263375277": {
+    "salesByWarehouse": {
+      "Невинномысск": 1,
+      "Краснодар": 1,
+      "Коледино": 3,
+      "Рязань (Тюшевское)": 1
+    },
+    "totalSales": 6,
+    "totalRevenue": 1101,
+    "avgDailySales": 0.2
+  },
+  "263421990": {
+    "salesByWarehouse": {
+      "Тула": 2,
+      "Коледино": 30,
+      "СЦ Шушары Московское шоссе": 4
+    },
+    "totalSales": 36,
+    "totalRevenue": 5892,
+    "avgDailySales": 1.2
+  },
+  "369268845": {
+    "salesByWarehouse": {
+      "Коледино": 5
+    },
+    "totalSales": 5,
+    "totalRevenue": 1718,
+    "avgDailySales": 0.17
+  },
+  "256330332": {
+    "salesByWarehouse": {
+      "Краснодар": 2,
+      "Коледино": 1
+    },
+    "totalSales": 3,
+    "totalRevenue": 1077,
+    "avgDailySales": 0.1
+  },
+  "297308216": {
+    "salesByWarehouse": {
+      "Невинномысск": 1,
+      "Коледино": 6
+    },
+    "totalSales": 7,
+    "totalRevenue": 1656,
+    "avgDailySales": 0.23
+  },
+  "364874856": {
+    "salesByWarehouse": {
+      "Коледино": 11,
+      "Тула": 1,
+      "Краснодар": 3,
+      "Невинномысск": 2
+    },
+    "totalSales": 17,
+    "totalRevenue": 4779,
+    "avgDailySales": 0.57
+  },
+  "395687592": {
+    "salesByWarehouse": {
+      "СЦ Шушары Московское шоссе": 2,
+      "Коледино": 5,
+      "Тула": 5
+    },
+    "totalSales": 12,
+    "totalRevenue": 5365,
+    "avgDailySales": 0.4
+  },
+  "368722829": {
+    "salesByWarehouse": {
+      "Коледино": 1,
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 2,
+    "totalRevenue": 830,
+    "avgDailySales": 0.07
+  },
+  "324987506": {
+    "salesByWarehouse": {
+      "Коледино": 5,
+      "Электросталь": 2,
+      "Краснодар": 1,
+      "СЦ Шушары Московское шоссе": 2
+    },
+    "totalSales": 10,
+    "totalRevenue": 4899,
+    "avgDailySales": 0.33
+  },
+  "318065358": {
+    "salesByWarehouse": {
+      "Коледино": 2
+    },
+    "totalSales": 2,
+    "totalRevenue": 3376,
+    "avgDailySales": 0.07
+  },
+  "388130732": {
+    "salesByWarehouse": {
+      "Коледино": 4,
+      "Краснодар": 1
+    },
+    "totalSales": 5,
+    "totalRevenue": 1911,
+    "avgDailySales": 0.17
+  },
+  "366500732": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 229,
+    "avgDailySales": 0.03
+  },
+  "254343667": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 3777,
+    "avgDailySales": 0.03
+  },
+  "312124266": {
+    "salesByWarehouse": {
+      "Краснодар": 4,
+      "Электросталь": 1
+    },
+    "totalSales": 5,
+    "totalRevenue": 7095,
+    "avgDailySales": 0.17
+  },
+  "420141161": {
+    "salesByWarehouse": {
+      "Коледино": 5,
+      "Электросталь": 1,
+      "Волгоград": 1
+    },
+    "totalSales": 7,
+    "totalRevenue": 2751,
+    "avgDailySales": 0.23
+  },
+  "252644563": {
+    "salesByWarehouse": {
+      "Краснодар": 2,
+      "Коледино": 2,
+      "Невинномысск": 1
+    },
+    "totalSales": 5,
+    "totalRevenue": 3151,
+    "avgDailySales": 0.17
+  },
+  "267401726": {
+    "salesByWarehouse": {
+      "Коледино": 2
+    },
+    "totalSales": 2,
+    "totalRevenue": 562,
+    "avgDailySales": 0.07
+  },
+  "300327913": {
+    "salesByWarehouse": {
+      "Коледино": 2
+    },
+    "totalSales": 2,
+    "totalRevenue": 820,
+    "avgDailySales": 0.07
+  },
+  "278346956": {
+    "salesByWarehouse": {
+      "Коледино": 21,
+      "СЦ Шушары Московское шоссе": 1,
+      "Тула": 5
+    },
+    "totalSales": 27,
+    "totalRevenue": 10987,
+    "avgDailySales": 0.9
+  },
+  "368699026": {
+    "salesByWarehouse": {
+      "Коледино": 3,
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 4,
+    "totalRevenue": 898,
+    "avgDailySales": 0.13
+  },
+  "283893099": {
+    "salesByWarehouse": {
+      "Коледино": 18,
+      "Краснодар": 9,
+      "Невинномысск": 7,
+      "Тула": 5,
+      "СЦ Шушары Московское шоссе": 6
+    },
+    "totalSales": 45,
+    "totalRevenue": 8630,
+    "avgDailySales": 1.5
+  },
+  "291850280": {
+    "salesByWarehouse": {
+      "Невинномысск": 1,
+      "Коледино": 10,
+      "Краснодар": 1
+    },
+    "totalSales": 12,
+    "totalRevenue": 3146,
+    "avgDailySales": 0.4
+  },
+  "318064692": {
+    "salesByWarehouse": {
+      "Коледино": 7,
+      "Краснодар": 3,
+      "Тула": 2,
+      "Невинномысск": 4
+    },
+    "totalSales": 16,
+    "totalRevenue": 21957,
+    "avgDailySales": 0.53
+  },
+  "367438540": {
+    "salesByWarehouse": {
+      "Электросталь": 1,
+      "Тула": 1,
+      "Белые Столбы": 1,
+      "Коледино": 5,
+      "Казань": 4
+    },
+    "totalSales": 12,
+    "totalRevenue": 2018,
+    "avgDailySales": 0.4
+  },
+  "300346303": {
+    "salesByWarehouse": {
+      "Коледино": 29,
+      "Невинномысск": 6,
+      "Чашниково": 1,
+      "Краснодар": 10
+    },
+    "totalSales": 46,
+    "totalRevenue": 12580,
+    "avgDailySales": 1.53
+  },
+  "267407306": {
+    "salesByWarehouse": {
+      "Коледино": 2,
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 3,
+    "totalRevenue": 851,
+    "avgDailySales": 0.1
+  },
+  "278947089": {
+    "salesByWarehouse": {
+      "Коледино": 23,
+      "СЦ Шушары Московское шоссе": 6,
+      "Краснодар": 2
+    },
+    "totalSales": 31,
+    "totalRevenue": 8259,
+    "avgDailySales": 1.03
+  },
+  "398453789": {
+    "salesByWarehouse": {
+      "Коледино": 16,
+      "СЦ Шушары Московское шоссе": 3
+    },
+    "totalSales": 19,
+    "totalRevenue": 6036,
+    "avgDailySales": 0.63
+  },
+  "283628625": {
+    "salesByWarehouse": {
+      "Коледино": 3
+    },
+    "totalSales": 3,
+    "totalRevenue": 1068,
+    "avgDailySales": 0.1
+  },
+  "310263287": {
+    "salesByWarehouse": {
+      "Коледино": 9,
+      "СЦ Шушары Московское шоссе": 3
+    },
+    "totalSales": 12,
+    "totalRevenue": 3190,
+    "avgDailySales": 0.4
+  },
+  "414529592": {
+    "salesByWarehouse": {
+      "Коледино": 3,
+      "СЦ Шушары Московское шоссе": 2
+    },
+    "totalSales": 5,
+    "totalRevenue": 3976,
+    "avgDailySales": 0.17
+  },
+  "414486363": {
+    "salesByWarehouse": {
+      "Коледино": 10,
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 11,
+    "totalRevenue": 6549,
+    "avgDailySales": 0.37
+  },
+  "257056950": {
+    "salesByWarehouse": {
+      "Электросталь": 1,
+      "Краснодар": 2,
+      "Коледино": 11,
+      "Тула": 1
+    },
+    "totalSales": 15,
+    "totalRevenue": 6170,
+    "avgDailySales": 0.5
+  },
+  "252685830": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 2113,
+    "avgDailySales": 0.03
+  },
+  "305384686": {
+    "salesByWarehouse": {
+      "Коледино": 4
+    },
+    "totalSales": 4,
+    "totalRevenue": 1608,
+    "avgDailySales": 0.13
+  },
+  "297885117": {
+    "salesByWarehouse": {
+      "Коледино": 13,
+      "СЦ Шушары Московское шоссе": 3
+    },
+    "totalSales": 16,
+    "totalRevenue": 6116,
+    "avgDailySales": 0.53
+  },
+  "259581459": {
+    "salesByWarehouse": {
+      "Коледино": 6,
+      "Краснодар": 3,
+      "Белая дача": 1,
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 11,
+    "totalRevenue": 5774,
+    "avgDailySales": 0.37
+  },
+  "430961262": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 635,
+    "avgDailySales": 0.03
+  },
+  "283843538": {
+    "salesByWarehouse": {
+      "Краснодар": 1,
+      "Коледино": 3
+    },
+    "totalSales": 4,
+    "totalRevenue": 824,
+    "avgDailySales": 0.13
+  },
+  "437111071": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 39454,
+    "avgDailySales": 0.03
+  },
+  "312135830": {
+    "salesByWarehouse": {
+      "Коледино": 2
+    },
+    "totalSales": 2,
+    "totalRevenue": 4336,
+    "avgDailySales": 0.07
+  },
+  "289446221": {
+    "salesByWarehouse": {
+      "Краснодар": 3,
+      "Коледино": 9,
+      "Самара (Новосемейкино)": 1,
+      "Тула": 5,
+      "Электросталь": 1,
+      "Невинномысск": 4,
+      "Котовск": 1
+    },
+    "totalSales": 24,
+    "totalRevenue": 6073,
+    "avgDailySales": 0.8
+  },
+  "252668510": {
+    "salesByWarehouse": {
+      "Коледино": 9,
+      "Краснодар": 2,
+      "Невинномысск": 1
+    },
+    "totalSales": 12,
+    "totalRevenue": 19885,
+    "avgDailySales": 0.4
+  },
+  "291185612": {
+    "salesByWarehouse": {
+      "Коледино": 1,
+      "Краснодар": 1
+    },
+    "totalSales": 2,
+    "totalRevenue": 573,
+    "avgDailySales": 0.07
+  },
+  "275406320": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 396,
+    "avgDailySales": 0.03
+  },
+  "411640678": {
+    "salesByWarehouse": {
+      "Коледино": 7,
+      "Тула": 6,
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 14,
+    "totalRevenue": 7019,
+    "avgDailySales": 0.47
+  },
+  "341587479": {
+    "salesByWarehouse": {
+      "Коледино": 13,
+      "СЦ Шушары Московское шоссе": 2
+    },
+    "totalSales": 15,
+    "totalRevenue": 2398,
+    "avgDailySales": 0.5
+  },
+  "364822208": {
+    "salesByWarehouse": {
+      "Коледино": 3
+    },
+    "totalSales": 3,
+    "totalRevenue": 818,
+    "avgDailySales": 0.1
+  },
+  "263085807": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 1386,
+    "avgDailySales": 0.03
+  },
+  "318066039": {
+    "salesByWarehouse": {
+      "Коледино": 7,
+      "СЦ Шушары Московское шоссе": 1,
+      "Самара (Новосемейкино)": 1
+    },
+    "totalSales": 9,
+    "totalRevenue": 13033,
+    "avgDailySales": 0.3
+  },
+  "420097211": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 372,
+    "avgDailySales": 0.03
+  },
+  "259548506": {
+    "salesByWarehouse": {
+      "Коледино": 3,
+      "Казань": 1
+    },
+    "totalSales": 4,
+    "totalRevenue": 1762,
+    "avgDailySales": 0.13
+  },
+  "371690437": {
+    "salesByWarehouse": {
+      "Коледино": 10,
+      "Невинномысск": 1,
+      "Электросталь": 1
+    },
+    "totalSales": 12,
+    "totalRevenue": 4440,
+    "avgDailySales": 0.4
+  },
+  "369567959": {
+    "salesByWarehouse": {
+      "Коледино": 1,
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 2,
+    "totalRevenue": 2548,
+    "avgDailySales": 0.07
+  },
+  "308560482": {
+    "salesByWarehouse": {
+      "Коледино": 3
+    },
+    "totalSales": 3,
+    "totalRevenue": 1416,
+    "avgDailySales": 0.1
+  },
+  "399197963": {
+    "salesByWarehouse": {
+      "Тула": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 482,
+    "avgDailySales": 0.03
+  },
+  "255837804": {
+    "salesByWarehouse": {
+      "Тула": 1,
+      "Коледино": 6
+    },
+    "totalSales": 7,
+    "totalRevenue": 5367,
+    "avgDailySales": 0.23
+  },
+  "399146341": {
+    "salesByWarehouse": {
+      "Коледино": 2,
+      "СЦ Шушары Московское шоссе": 1,
+      "Санкт-Петербург Уткина Заводь": 1
+    },
+    "totalSales": 4,
+    "totalRevenue": 1891,
+    "avgDailySales": 0.13
+  },
+  "360725513": {
+    "salesByWarehouse": {
+      "Коледино": 2
+    },
+    "totalSales": 2,
+    "totalRevenue": 4556,
+    "avgDailySales": 0.07
+  },
+  "267409200": {
+    "salesByWarehouse": {
+      "Коледино": 4
+    },
+    "totalSales": 4,
+    "totalRevenue": 1079,
+    "avgDailySales": 0.13
+  },
+  "369434368": {
+    "salesByWarehouse": {
+      "Коледино": 8,
+      "СЦ Шушары Московское шоссе": 1,
+      "Казань": 1
+    },
+    "totalSales": 10,
+    "totalRevenue": 26484,
+    "avgDailySales": 0.33
+  },
+  "253018385": {
+    "salesByWarehouse": {
+      "Коледино": 2
+    },
+    "totalSales": 2,
+    "totalRevenue": 59052,
+    "avgDailySales": 0.07
+  },
+  "265226908": {
+    "salesByWarehouse": {
+      "Коледино": 23,
+      "СЦ Шушары Московское шоссе": 11,
+      "Тула": 1,
+      "Котовск": 1
+    },
+    "totalSales": 36,
+    "totalRevenue": 7805,
+    "avgDailySales": 1.2
+  },
+  "291183516": {
+    "salesByWarehouse": {
+      "Коледино": 7,
+      "СЦ Шушары Московское шоссе": 1,
+      "Электросталь": 1
+    },
+    "totalSales": 9,
+    "totalRevenue": 2673,
+    "avgDailySales": 0.3
+  },
+  "291179609": {
+    "salesByWarehouse": {
+      "Коледино": 5,
+      "СЦ Шушары Московское шоссе": 2
+    },
+    "totalSales": 7,
+    "totalRevenue": 2088,
+    "avgDailySales": 0.23
+  },
+  "439567700": {
+    "salesByWarehouse": {
+      "Коледино": 1,
+      "СЦ Шушары Московское шоссе": 2
+    },
+    "totalSales": 3,
+    "totalRevenue": 1255,
+    "avgDailySales": 0.1
+  },
+  "296980674": {
+    "salesByWarehouse": {
+      "Краснодар": 3,
+      "Невинномысск": 3,
+      "Коледино": 4
+    },
+    "totalSales": 10,
+    "totalRevenue": 3851,
+    "avgDailySales": 0.33
+  },
+  "364892755": {
+    "salesByWarehouse": {
+      "Коледино": 2,
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 3,
+    "totalRevenue": 1057,
+    "avgDailySales": 0.1
+  },
+  "291184885": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 313,
+    "avgDailySales": 0.03
+  },
+  "372927147": {
+    "salesByWarehouse": {
+      "Коледино": 6,
+      "Краснодар": 3,
+      "Электросталь": 1
+    },
+    "totalSales": 10,
+    "totalRevenue": 3409,
+    "avgDailySales": 0.33
+  },
+  "369430754": {
+    "salesByWarehouse": {
+      "Коледино": 8,
+      "СЦ Шушары Московское шоссе": 2
+    },
+    "totalSales": 10,
+    "totalRevenue": 3949,
+    "avgDailySales": 0.33
+  },
+  "395687595": {
+    "salesByWarehouse": {
+      "Коледино": 3
+    },
+    "totalSales": 3,
+    "totalRevenue": 1462,
+    "avgDailySales": 0.1
+  },
+  "364871239": {
+    "salesByWarehouse": {
+      "СЦ Шушары Московское шоссе": 1,
+      "Коледино": 3,
+      "Краснодар": 1,
+      "Электросталь": 1,
+      "Казань": 1
+    },
+    "totalSales": 7,
+    "totalRevenue": 2064,
+    "avgDailySales": 0.23
+  },
+  "297308217": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 264,
+    "avgDailySales": 0.03
+  },
+  "363370806": {
+    "salesByWarehouse": {
+      "Коледино": 2
+    },
+    "totalSales": 2,
+    "totalRevenue": 891,
+    "avgDailySales": 0.07
+  },
+  "298649783": {
+    "salesByWarehouse": {
+      "Коледино": 15,
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 16,
+    "totalRevenue": 2529,
+    "avgDailySales": 0.53
+  },
+  "263496715": {
+    "salesByWarehouse": {
+      "Коледино": 2,
+      "СЦ Шушары Московское шоссе": 2
+    },
+    "totalSales": 4,
+    "totalRevenue": 1262,
+    "avgDailySales": 0.13
+  },
+  "315161732": {
+    "salesByWarehouse": {
+      "Коледино": 2
+    },
+    "totalSales": 2,
+    "totalRevenue": 6656,
+    "avgDailySales": 0.07
+  },
+  "388955425": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 290,
+    "avgDailySales": 0.03
+  },
+  "369380452": {
+    "salesByWarehouse": {
+      "Коледино": 10,
+      "СЦ Шушары Московское шоссе": 4,
+      "Тула": 1
+    },
+    "totalSales": 15,
+    "totalRevenue": 12333,
+    "avgDailySales": 0.5
+  },
+  "261664334": {
+    "salesByWarehouse": {
+      "Коледино": 2,
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 3,
+    "totalRevenue": 4988,
+    "avgDailySales": 0.1
+  },
+  "369359343": {
+    "salesByWarehouse": {
+      "Коледино": 12,
+      "СЦ Шушары Московское шоссе": 2,
+      "Казань": 2
+    },
+    "totalSales": 16,
+    "totalRevenue": 12555,
+    "avgDailySales": 0.53
+  },
+  "327220230": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 450,
+    "avgDailySales": 0.03
+  },
+  "312114674": {
+    "salesByWarehouse": {
+      "Краснодар": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 254,
+    "avgDailySales": 0.03
+  },
+  "364823330": {
+    "salesByWarehouse": {
+      "Коледино": 3
+    },
+    "totalSales": 3,
+    "totalRevenue": 769,
+    "avgDailySales": 0.1
+  },
+  "372050914": {
+    "salesByWarehouse": {
+      "Коледино": 12,
+      "СЦ Шушары Московское шоссе": 5
+    },
+    "totalSales": 17,
+    "totalRevenue": 7625,
+    "avgDailySales": 0.57
+  },
+  "412492285": {
+    "salesByWarehouse": {
+      "Коледино": 2
+    },
+    "totalSales": 2,
+    "totalRevenue": 1488,
+    "avgDailySales": 0.07
+  },
+  "367438543": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 432,
+    "avgDailySales": 0.03
+  },
+  "275390213": {
+    "salesByWarehouse": {
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 515,
+    "avgDailySales": 0.03
+  },
+  "252661978": {
+    "salesByWarehouse": {
+      "Коледино": 2
+    },
+    "totalSales": 2,
+    "totalRevenue": 1188,
+    "avgDailySales": 0.07
+  },
+  "411638377": {
+    "salesByWarehouse": {
+      "Коледино": 6,
+      "СЦ Шушары Московское шоссе": 4,
+      "Тула": 2,
+      "Казань": 1
+    },
+    "totalSales": 13,
+    "totalRevenue": 10587,
+    "avgDailySales": 0.43
+  },
+  "320417644": {
+    "salesByWarehouse": {
+      "Коледино": 2
+    },
+    "totalSales": 2,
+    "totalRevenue": 540,
+    "avgDailySales": 0.07
+  },
+  "325137413": {
+    "salesByWarehouse": {
+      "Казань": 1,
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 2,
+    "totalRevenue": 558,
+    "avgDailySales": 0.07
+  },
+  "372090075": {
+    "salesByWarehouse": {
+      "СЦ Шушары Московское шоссе": 1,
+      "Коледино": 2
+    },
+    "totalSales": 3,
+    "totalRevenue": 704,
+    "avgDailySales": 0.1
+  },
+  "368688421": {
+    "salesByWarehouse": {
+      "Тула": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 399,
+    "avgDailySales": 0.03
+  },
+  "257131177": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 303,
+    "avgDailySales": 0.03
+  },
+  "327389305": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 448,
+    "avgDailySales": 0.03
+  },
+  "305246858": {
+    "salesByWarehouse": {
+      "Коледино": 7,
+      "СЦ Шушары Московское шоссе": 2
+    },
+    "totalSales": 9,
+    "totalRevenue": 1695,
+    "avgDailySales": 0.3
+  },
+  "417270011": {
+    "salesByWarehouse": {
+      "Коледино": 1,
+      "СЦ Шушары Московское шоссе": 2
+    },
+    "totalSales": 3,
+    "totalRevenue": 991,
+    "avgDailySales": 0.1
+  },
+  "372018053": {
+    "salesByWarehouse": {
+      "СЦ Шушары Московское шоссе": 1,
+      "Коледино": 4
+    },
+    "totalSales": 5,
+    "totalRevenue": 2381,
+    "avgDailySales": 0.17
+  },
+  "306837117": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 931,
+    "avgDailySales": 0.03
+  },
+  "372279690": {
+    "salesByWarehouse": {
+      "Коледино": 3
+    },
+    "totalSales": 3,
+    "totalRevenue": 571,
+    "avgDailySales": 0.1
+  },
+  "310978354": {
+    "salesByWarehouse": {
+      "Тула": 1,
+      "Коледино": 2
+    },
+    "totalSales": 3,
+    "totalRevenue": 997,
+    "avgDailySales": 0.1
+  },
+  "371850037": {
+    "salesByWarehouse": {
+      "Коледино": 6,
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 7,
+    "totalRevenue": 2037,
+    "avgDailySales": 0.23
+  },
+  "267395535": {
+    "salesByWarehouse": {
+      "Коледино": 5,
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 6,
+    "totalRevenue": 1562,
+    "avgDailySales": 0.2
+  },
+  "252667836": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 14081,
+    "avgDailySales": 0.03
+  },
+  "297860305": {
+    "salesByWarehouse": {
+      "Коледино": 4,
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 5,
+    "totalRevenue": 941,
+    "avgDailySales": 0.17
+  },
+  "365226352": {
+    "salesByWarehouse": {
+      "Коледино": 2
+    },
+    "totalSales": 2,
+    "totalRevenue": 888,
+    "avgDailySales": 0.07
+  },
+  "275080110": {
+    "salesByWarehouse": {
+      "Коледино": 2,
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 3,
+    "totalRevenue": 52313,
+    "avgDailySales": 0.1
+  },
+  "329696530": {
+    "salesByWarehouse": {
+      "Коледино": 5,
+      "СЦ Шушары Московское шоссе": 5,
+      "Краснодар": 1
+    },
+    "totalSales": 11,
+    "totalRevenue": 3751,
+    "avgDailySales": 0.37
+  },
+  "312116757": {
+    "salesByWarehouse": {
+      "СЦ Шушары Московское шоссе": 2
+    },
+    "totalSales": 2,
+    "totalRevenue": 648,
+    "avgDailySales": 0.07
+  },
+  "372226481": {
+    "salesByWarehouse": {
+      "Коледино": 10
+    },
+    "totalSales": 10,
+    "totalRevenue": 2695,
+    "avgDailySales": 0.33
+  },
+  "301257693": {
+    "salesByWarehouse": {
+      "Краснодар": 1,
+      "Коледино": 1
+    },
+    "totalSales": 2,
+    "totalRevenue": 798,
+    "avgDailySales": 0.07
+  },
+  "304970609": {
+    "salesByWarehouse": {
+      "Тула": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 13242,
+    "avgDailySales": 0.03
+  },
+  "364824430": {
+    "salesByWarehouse": {
+      "Волгоград": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 281,
+    "avgDailySales": 0.03
+  },
+  "417179615": {
+    "salesByWarehouse": {
+      "Коледино": 11,
+      "Тула": 5,
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 17,
+    "totalRevenue": 6767,
+    "avgDailySales": 0.57
+  },
+  "329842241": {
+    "salesByWarehouse": {
+      "Невинномысск": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 451,
+    "avgDailySales": 0.03
+  },
+  "364887493": {
+    "salesByWarehouse": {
+      "Коледино": 4
+    },
+    "totalSales": 4,
+    "totalRevenue": 760,
+    "avgDailySales": 0.13
+  },
+  "445341888": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 879,
+    "avgDailySales": 0.03
+  },
+  "284068490": {
+    "salesByWarehouse": {
+      "Коледино": 4
+    },
+    "totalSales": 4,
+    "totalRevenue": 984,
+    "avgDailySales": 0.13
+  },
+  "412752080": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 238,
+    "avgDailySales": 0.03
+  },
+  "283432292": {
+    "salesByWarehouse": {
+      "Коледино": 3
+    },
+    "totalSales": 3,
+    "totalRevenue": 677,
+    "avgDailySales": 0.1
+  },
+  "312135829": {
+    "salesByWarehouse": {
+      "Невинномысск": 2,
+      "Коледино": 2
+    },
+    "totalSales": 4,
+    "totalRevenue": 6884,
+    "avgDailySales": 0.13
+  },
+  "388916174": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 662,
+    "avgDailySales": 0.03
+  },
+  "298645812": {
+    "salesByWarehouse": {
+      "СЦ Шушары Московское шоссе": 2,
+      "Коледино": 2
+    },
+    "totalSales": 4,
+    "totalRevenue": 790,
+    "avgDailySales": 0.13
+  },
+  "275406319": {
+    "salesByWarehouse": {
+      "Краснодар": 1,
+      "Электросталь": 3,
+      "Невинномысск": 6
+    },
+    "totalSales": 10,
+    "totalRevenue": 4670,
+    "avgDailySales": 0.33
+  },
+  "414468948": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 478,
+    "avgDailySales": 0.03
+  },
+  "296777082": {
+    "salesByWarehouse": {
+      "Коледино": 3
+    },
+    "totalSales": 3,
+    "totalRevenue": 732,
+    "avgDailySales": 0.1
+  },
+  "263376384": {
+    "salesByWarehouse": {
+      "СЦ Шушары Московское шоссе": 3,
+      "Коледино": 3
+    },
+    "totalSales": 6,
+    "totalRevenue": 1644,
+    "avgDailySales": 0.2
+  },
+  "449814844": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 3313,
+    "avgDailySales": 0.03
+  },
+  "290771448": {
+    "salesByWarehouse": {
+      "Коледино": 1,
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 2,
+    "totalRevenue": 1051,
+    "avgDailySales": 0.07
+  },
+  "291186365": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 292,
+    "avgDailySales": 0.03
+  },
+  "303247406": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 3644,
+    "avgDailySales": 0.03
+  },
+  "265147557": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 528,
+    "avgDailySales": 0.03
+  },
+  "257132413": {
+    "salesByWarehouse": {
+      "Коледино": 3
+    },
+    "totalSales": 3,
+    "totalRevenue": 846,
+    "avgDailySales": 0.1
+  },
+  "263367455": {
+    "salesByWarehouse": {
+      "Коледино": 2,
+      "Электросталь": 1
+    },
+    "totalSales": 3,
+    "totalRevenue": 1427,
+    "avgDailySales": 0.1
+  },
+  "291176634": {
+    "salesByWarehouse": {
+      "Электросталь": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 292,
+    "avgDailySales": 0.03
+  },
+  "364882724": {
+    "salesByWarehouse": {
+      "Коледино": 4,
+      "Краснодар": 1,
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 6,
+    "totalRevenue": 1101,
+    "avgDailySales": 0.2
+  },
+  "261628312": {
+    "salesByWarehouse": {
+      "Волгоград": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 445,
+    "avgDailySales": 0.03
+  },
+  "265094338": {
+    "salesByWarehouse": {
+      "Коледино": 2
+    },
+    "totalSales": 2,
+    "totalRevenue": 435,
+    "avgDailySales": 0.07
+  },
+  "256345246": {
+    "salesByWarehouse": {
+      "Коледино": 1,
+      "Электросталь": 1
+    },
+    "totalSales": 2,
+    "totalRevenue": 735,
+    "avgDailySales": 0.07
+  },
+  "449864401": {
+    "salesByWarehouse": {
+      "СЦ Шушары Московское шоссе": 2,
+      "Коледино": 1
+    },
+    "totalSales": 3,
+    "totalRevenue": 466,
+    "avgDailySales": 0.1
+  },
+  "311754525": {
+    "salesByWarehouse": {
+      "Коледино": 3
+    },
+    "totalSales": 3,
+    "totalRevenue": 986,
+    "avgDailySales": 0.1
+  },
+  "305475159": {
+    "salesByWarehouse": {
+      "Коледино": 2
+    },
+    "totalSales": 2,
+    "totalRevenue": 2287,
+    "avgDailySales": 0.07
+  },
+  "291230710": {
+    "salesByWarehouse": {
+      "Электросталь": 1,
+      "Коледино": 1
+    },
+    "totalSales": 2,
+    "totalRevenue": 1084,
+    "avgDailySales": 0.07
+  },
+  "301292585": {
+    "salesByWarehouse": {
+      "Электросталь": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 288,
+    "avgDailySales": 0.03
+  },
+  "315052367": {
+    "salesByWarehouse": {
+      "Коледино": 2,
+      "Краснодар": 1
+    },
+    "totalSales": 3,
+    "totalRevenue": 1263,
+    "avgDailySales": 0.1
+  },
+  "259550846": {
+    "salesByWarehouse": {
+      "Коледино": 3
+    },
+    "totalSales": 3,
+    "totalRevenue": 10129,
+    "avgDailySales": 0.1
+  },
+  "449866853": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 179,
+    "avgDailySales": 0.03
+  },
+  "436693301": {
+    "salesByWarehouse": {
+      "Коледино": 1,
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 2,
+    "totalRevenue": 4308,
+    "avgDailySales": 0.07
+  },
+  "329789432": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 319,
+    "avgDailySales": 0.03
+  },
+  "283518572": {
+    "salesByWarehouse": {
+      "Коледино": 3,
+      "СЦ Шушары Московское шоссе": 1,
+      "Электросталь": 1
+    },
+    "totalSales": 5,
+    "totalRevenue": 893,
+    "avgDailySales": 0.17
+  },
+  "291182800": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 292,
+    "avgDailySales": 0.03
+  },
+  "292135432": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 778,
+    "avgDailySales": 0.03
+  },
+  "370448590": {
+    "salesByWarehouse": {
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 2188,
+    "avgDailySales": 0.03
+  },
+  "296821379": {
+    "salesByWarehouse": {
+      "Коледино": 3
+    },
+    "totalSales": 3,
+    "totalRevenue": 693,
+    "avgDailySales": 0.1
+  },
+  "252647196": {
+    "salesByWarehouse": {
+      "СЦ Шушары Московское шоссе": 1,
+      "Коледино": 1
+    },
+    "totalSales": 2,
+    "totalRevenue": 4713,
+    "avgDailySales": 0.07
+  },
+  "263509716": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 198,
+    "avgDailySales": 0.03
+  },
+  "261629645": {
+    "salesByWarehouse": {
+      "Казань": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 527,
+    "avgDailySales": 0.03
+  },
+  "388955423": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 492,
+    "avgDailySales": 0.03
+  },
+  "388955422": {
+    "salesByWarehouse": {
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 391,
+    "avgDailySales": 0.03
+  },
+  "284158813": {
+    "salesByWarehouse": {
+      "СЦ Шушары Московское шоссе": 1,
+      "Коледино": 3
+    },
+    "totalSales": 4,
+    "totalRevenue": 1750,
+    "avgDailySales": 0.13
+  },
+  "278950486": {
+    "salesByWarehouse": {
+      "Коледино": 4
+    },
+    "totalSales": 4,
+    "totalRevenue": 1367,
+    "avgDailySales": 0.13
+  },
+  "329842242": {
+    "salesByWarehouse": {
+      "Невинномысск": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 390,
+    "avgDailySales": 0.03
+  },
+  "252667481": {
+    "salesByWarehouse": {
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 19815,
+    "avgDailySales": 0.03
+  },
+  "414620838": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 375,
+    "avgDailySales": 0.03
+  },
+  "366500731": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 167,
+    "avgDailySales": 0.03
+  },
+  "421837760": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 1039,
+    "avgDailySales": 0.03
+  },
+  "270939752": {
+    "salesByWarehouse": {
+      "Электросталь": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 329,
+    "avgDailySales": 0.03
+  },
+  "412847757": {
+    "salesByWarehouse": {
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 275,
+    "avgDailySales": 0.03
+  },
+  "341573180": {
+    "salesByWarehouse": {
+      "Краснодар": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 1879,
+    "avgDailySales": 0.03
+  },
+  "414656920": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 377,
+    "avgDailySales": 0.03
+  },
+  "265118915": {
+    "salesByWarehouse": {
+      "Краснодар": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 399,
+    "avgDailySales": 0.03
+  },
+  "265093082": {
+    "salesByWarehouse": {
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 399,
+    "avgDailySales": 0.03
+  },
+  "263371044": {
+    "salesByWarehouse": {
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 550,
+    "avgDailySales": 0.03
+  },
+  "346502142": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 35014,
+    "avgDailySales": 0.03
+  },
+  "387553263": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 468,
+    "avgDailySales": 0.03
+  },
+  "446766679": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 397,
+    "avgDailySales": 0.03
+  },
+  "371769216": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 296,
+    "avgDailySales": 0.03
+  },
+  "296041791": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 1512,
+    "avgDailySales": 0.03
+  },
+  "367438542": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 252,
+    "avgDailySales": 0.03
+  },
+  "265147558": {
+    "salesByWarehouse": {
+      "СЦ Шушары Московское шоссе": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 479,
+    "avgDailySales": 0.03
+  },
+  "301339560": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 294,
+    "avgDailySales": 0.03
+  },
+  "289391614": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 769,
+    "avgDailySales": 0.03
+  },
+  "400583294": {
+    "salesByWarehouse": {
+      "Невинномысск": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 176,
+    "avgDailySales": 0.03
+  },
+  "449053861": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 388,
+    "avgDailySales": 0.03
+  },
+  "370473130": {
+    "salesByWarehouse": {
+      "Коледино": 1
+    },
+    "totalSales": 1,
+    "totalRevenue": 1140,
+    "avgDailySales": 0.03
+  }
+}

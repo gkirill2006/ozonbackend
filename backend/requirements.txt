@@ -1,0 +1,15 @@
+Django>=4.2
+gunicorn
+celery
+redis
+psycopg2-binary
+python-dotenv
+requests
+django-jazzmin
+djangorestframework
+django-cors-headers
+djangorestframework-simplejwt
+django_celery_beat
+gspread
+gspread-formatting
+google-auth

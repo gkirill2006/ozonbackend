@@ -1,0 +1,38 @@
+{
+  "Коледино": {
+    "ordersCount": 669,
+    "revenue": 377672.2300000001,
+    "warehouseType": "Склад WB",
+    "weight": 45.14,
+    "col_index": 14,
+    "col_letter": "N",
+    "color": "#C07BAA"
+  },
+  "Краснодар": {
+    "ordersCount": 268,
+    "revenue": 168085.43,
+    "warehouseType": "Склад WB",
+    "weight": 20.09,
+    "col_index": 16,
+    "col_letter": "P",
+    "color": "#8B7A89"
+  },
+  "Тула": {
+    "ordersCount": 172,
+    "revenue": 110804.85,
+    "warehouseType": "Склад WB",
+    "weight": 13.24,
+    "col_index": 18,
+    "col_letter": "R",
+    "color": "#81B996"
+  },
+  "Невинномысск": {
+    "ordersCount": 193,
+    "revenue": 106211.07999999997,
+    "warehouseType": "Склад WB",
+    "weight": 12.7,
+    "col_index": 20,
+    "col_letter": "T",
+    "color": "#7A789F"
+  }
+}

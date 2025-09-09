@@ -1,0 +1,85 @@
+
+services:
+  wb_analyzer:
+    build: .
+    container_name: wb_analyzer
+    ports:
+      - "9005:8000"
+    mem_limit: 512m
+    cpus: 0.5
+    restart: always
+    env_file: .env
+    volumes:
+      - .:/app
+
+  markets_backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: markets_backend
+    ports:
+      - "9006:8000"
+    # mem_limit: 512m
+    # cpus: 0.5
+    restart: always
+    env_file: .env
+    working_dir: /workspace/backend
+
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - .:/workspace
+
+  celery:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: markets_celery
+    env_file: .env
+    working_dir: /workspace/backend
+    command: celery -A backend worker --loglevel=info
+    volumes:
+      - .:/workspace
+    depends_on:
+      - markets_backend
+      - redis
+    restart: always
+  celery_beat:
+      build:
+        context: .
+        dockerfile: docker/Dockerfile.backend
+      container_name: markets_celery_beat
+      env_file: .env
+      working_dir: /workspace/backend
+      command: celery -A backend beat --loglevel=info
+      volumes:
+        - .:/workspace
+      depends_on:
+        - markets_backend
+        - redis
+        - db
+      restart: always
+  
+  db:
+    image: postgres:15
+    container_name: markets_db
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "15433:5432"
+
+  redis:
+    image: redis:6
+    container_name: markets_redis
+    restart: always
+    ports:
+      - "6380:6379"
+
+volumes:
+  pgdata:

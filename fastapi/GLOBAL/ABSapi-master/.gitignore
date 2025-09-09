@@ -1,0 +1,17 @@
+.bash_history
+.bash_logout
+.bashrc
+__pycache__
+.*
+back/.venv
+back/data/
+back/storage
+*.xlsx
+front/
+logs/
+shed/
+tmp/
+*.csv
+last500.log
+app.log
+!.gitignore
