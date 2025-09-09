@@ -2470,7 +2470,7 @@ def read_google_sheets_data(spreadsheet_url: str = None, sa_json_path: str = Non
                 train_days = int(train_days_cell) if train_days_cell else 0
             except (ValueError, TypeError):
                 train_days = 0
-            logger.info(f"[📅] Время обучения из T17: {train_days} дней")
+            logger.info(f"[📅] Время обучения из V17: {train_days} дней")
             
             # Находим магазин в базе данных
             store = None
@@ -2579,6 +2579,7 @@ def read_google_sheets_data(spreadsheet_url: str = None, sa_json_path: str = Non
                                     week_budget=week_budget_float,
                                     day_budget=week_budget_float / 7,
                                     manual_budget=manual_budget_float,  # Ручной бюджет из столбца I
+                                    train_days=train_days,
                                     abc_label='',
                                     has_existing_campaign=False,  # Это новая кампания
                                     ozon_campaign_id=campaign_id,
@@ -2994,3 +2995,95 @@ def sync_campaign_activity_with_sheets(spreadsheet_url: str = None, sa_json_path
         
         return {"error": str(e)}
     
+    
+# === Мониторинг рекламных кампаний по бюджету ===
+@shared_task(name="Еженедельный мониторинг бюджетов кампаний")
+def monitor_auto_campaigns_weekly(reenable_hour: int = 9):
+    """
+    Еженедельный мониторинг расходов автоматических РК по правилам:
+    1) Первые train_days дней после старта не вмешиваемся, только учитываем расход.
+    2) После train_days: если в текущей неделе остаётся 2 дня, делим остаток недельного бюджета пополам
+       и следим, чтобы дневной расход не превысил лимит этого дня; при превышении — деактивируем кампанию
+       и планируем повторную активацию на следующий день в reenable_hour.
+    3) Со следующей недели используем дневной бюджет (day_budget) как лимит и аналогично контролируем превышение.
+    Примечание: фактическое получение расходов сделано заглушками и требует интеграции с отчётами Performance API.
+    """
+    now = timezone.now()
+    checked = stopped = scheduled = skipped_training = 0
+
+    def _dec(x):
+        try:
+            return Decimal(str(x))
+        except Exception:
+            return Decimal('0')
+
+    def _week_left_days(dt):
+        # Monday=0..Sunday=6, остаток дней включая сегодня
+        return 7 - dt.weekday()
+
+    def _today_spend(ad: AdPlanItem) -> Decimal:
+        # Заглушка: при необходимости заменить на реальный отчёт
+        return _dec(ad.adv_spend or 0)
+
+    def _week_spend(ad: AdPlanItem) -> Decimal:
+        # Заглушка: заменить на накопительный расход за неделю
+        return _dec(ad.adv_spend or 0)
+
+    for ad in AdPlanItem.objects.filter(ozon_campaign_id__isnull=False).exclude(ozon_campaign_id=''):
+        try:
+            checked += 1
+            started_at = ad.ozon_created_at or ad.created_at
+            if not started_at:
+                continue
+            age_days = (now.date() - started_at.date()).days
+            if age_days < int(ad.train_days or 0):
+                skipped_training += 1
+                continue
+
+            week_budget = _dec(ad.week_budget or 0)
+            day_budget = _dec(ad.day_budget or 0)
+            days_left = _week_left_days(now)
+            rem_week = max(Decimal('0'), week_budget - _week_spend(ad))
+
+            if days_left == 2 and rem_week > 0:
+                day_limit = (rem_week / Decimal('2')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            else:
+                day_limit = (day_budget if day_budget > 0 else (week_budget / Decimal('7'))).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+            today_spend = _today_spend(ad)
+            if today_spend > day_limit + Decimal('0.01'):
+                # Превышение — останавливаем до завтра
+                try:
+                    from .utils import deactivate_campaign_for_store
+                    deactivate_campaign_for_store(ad.store, ad.ozon_campaign_id)
+                    AdPlanItem.objects.filter(id=ad.id).update(state=AdPlanItem.CAMPAIGN_STATE_STOPPED)
+                    stopped += 1
+                except Exception as e:
+                    logger.error(f"[❌] Ошибка деактивации {ad.ozon_campaign_id}: {e}")
+                # Планируем включение завтра в reenable_hour
+                try:
+                    eta = (now + timedelta(days=1)).replace(hour=reenable_hour, minute=0, second=0, microsecond=0)
+                    reactivate_campaign_later.apply_async(kwargs={"store_id": ad.store_id, "campaign_id": ad.ozon_campaign_id}, eta=eta)
+                    scheduled += 1
+                except Exception as e:
+                    logger.error(f"[❌] Не удалось запланировать активацию для {ad.ozon_campaign_id}: {e}")
+        except Exception as e:
+            logger.error(f"[❌] Ошибка мониторинга кампании {getattr(ad,'ozon_campaign_id','?')}: {e}")
+
+    logger.info(f"[📊] Мониторинг: проверено={checked}, обучение={skipped_training}, остановлено={stopped}, запланировано={scheduled}")
+
+
+@shared_task(name="Включение кампании по расписанию")
+def reactivate_campaign_later(store_id: int, campaign_id: str):
+    try:
+        store = OzonStore.objects.get(id=store_id)
+    except OzonStore.DoesNotExist:
+        logger.error(f"[❌] Магазин id={store_id} не найден для переактивации {campaign_id}")
+        return
+    try:
+        from .utils import activate_campaign_for_store
+        activate_campaign_for_store(store, campaign_id)
+        AdPlanItem.objects.filter(store=store, ozon_campaign_id=campaign_id).update(state=AdPlanItem.CAMPAIGN_STATE_ACTIVE)
+        logger.info(f"[✅] Кампания {campaign_id} переактивирована")
+    except Exception as e:
+        logger.error(f"[❌] Ошибка переактивации кампании {campaign_id}: {e}")

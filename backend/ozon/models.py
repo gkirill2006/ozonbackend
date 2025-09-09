@@ -293,6 +293,8 @@ class AdPlanItem(models.Model):
     week_budget = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     day_budget = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     manual_budget = models.DecimalField(max_digits=14, decimal_places=2, default=0, verbose_name="Ручной бюджет")
+    # Сколько дней отдаём кампании на обучение (из Google Sheets V17)
+    train_days = models.PositiveIntegerField(default=5, verbose_name="Дней на обучение")
 
     # ABC
     abc_label = models.CharField(max_length=1, blank=True)
@@ -304,12 +306,7 @@ class AdPlanItem(models.Model):
     ozon_campaign_id = models.CharField(max_length=100, blank=True)
     campaign_name = models.CharField(max_length=255, blank=True)
     campaign_type = models.CharField(max_length=50, blank=True)
-    state = models.CharField(
-        max_length=50,
-        choices=STATE_CHOICES,
-        default=CAMPAIGN_STATE_UNKNOWN,
-        verbose_name="Статус кампании"
-    )
+    state = models.CharField(max_length=50, choices=STATE_CHOICES, default=CAMPAIGN_STATE_UNKNOWN, verbose_name="Статус кампании")
     
     # Дополнительные поля из Ozon API
     payment_type = models.CharField(max_length=20, blank=True, verbose_name="Тип оплаты")  # CPO/CPC/CPM
