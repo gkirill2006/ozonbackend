@@ -287,8 +287,10 @@ def fetch_performance_reports(max_reports: int = 50):
 
             data = resp.json() if resp.text else {}
             obj.raw_response = data
-            # Парсим report.rows и report.totals, если есть
-            rep = data.get('report') or {}
+            # Парсим report.rows и report.totals. Возможны 2 формата:
+            # 1) { "report": { rows: [...], totals: {...} } }
+            # 2) { "<campaignId>": { title: ..., report: { ... } }, ... }
+            rep = data.get('report') or next((v.get('report') for v in data.values() if isinstance(v, dict) and 'report' in v), {})
             obj.rows = rep.get('rows') if isinstance(rep.get('rows'), list) else None
             obj.totals = rep.get('totals') if isinstance(rep.get('totals'), dict) else None
             obj.status = CampaignPerformanceReport.STATUS_READY
