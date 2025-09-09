@@ -968,8 +968,16 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None):
     Обновляет лист ABC из ProductDailyAnalytics.
     """
 
-    spreadsheet_url = spreadsheet_url or "https://docs.google.com/spreadsheets/d/1-_XS6aRZbpeEPFDyxH3OV0IMbl_GUUEysl6ZJXoLmQQ"
-    sa_json_path = sa_json_path or "/workspace/ozon-469708-c5f1eca77c02.json"
+    # Небольшая чистка: читаем значения из переменных окружения (с прежними дефолтами)
+    import os
+    spreadsheet_url = spreadsheet_url or os.getenv(
+        "ABC_SPREADSHEET_URL",
+        "https://docs.google.com/spreadsheets/d/1-_XS6aRZbpeEPFDyxH3OV0IMbl_GUUEysl6ZJXoLmQQ",
+    )
+    sa_json_path = sa_json_path or os.getenv(
+        "GOOGLE_SA_JSON_PATH",
+        "/workspace/ozon-469708-c5f1eca77c02.json",
+    )
 
     # Авторизация в Google Sheets
     scopes = [
@@ -1037,7 +1045,8 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None):
             or OzonStore.objects.filter(name__icontains=store_name_value).first()
             or OzonStore.objects.filter(client_id__icontains=store_name_value).first()
         )
-    t_params = time.perf_counter(); logger.info(f"[⏱] Чтение параметров (S13,S14..S23): {t_params - t_open:.3f}s")
+    # Исправлено описание координат: используем реальные V13..V27
+    t_params = time.perf_counter(); logger.info(f"[⏱] Чтение параметров (V13..V27): {t_params - t_open:.3f}s")
     if not store:
         logger.warning(f"[⚠️] Магазин из Main_ADV!S23 не найден: '{store_name_value}'. Пропускаем обновление ABC1.")
         return
@@ -1639,6 +1648,7 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None):
             revenue_dec = Decimal(str(revenue_val))  # Конвертируем выручку в Decimal для точных вычислений
             
             # Режим распределения: 0 — равномерно, 1 — по весу (выручке)
+            share = Decimal('0')  # для безопасного логирования, если распределение равномерное
             if 'budget_mode' in locals() and budget_mode == 0 and selected:
                 amount = (budget_total_ONE_WEEK / Decimal(len(selected)))  # недельный бюджет на товар (равномерно)
             elif selected_total_revenue > 0:
