@@ -522,7 +522,63 @@ class ManualCampaign(models.Model):
 
     def __str__(self):
         return f"{self.name} (ID: {self.ozon_campaign_id})"
-    
+
+
+# ХРАНЕНИЕ ОТЧЁТОВ PERFORMANCE API (статистика рекламных кампаний)
+class CampaignPerformanceReport(models.Model):
+    """
+    Сохраняет запрос/ответ отчёта Performance API по кампании за период.
+    Жизненный цикл:
+    - создаём запись со статусом PENDING после POST /statistics/json (сохраняем UUID, период, запрос)
+    - по готовности отчёта (GET /statistics/report?UUID=...) записываем ответ, строки, тоталы и статус READY
+    """
+
+    STATUS_PENDING = 'PENDING'
+    STATUS_READY = 'READY'
+    STATUS_ERROR = 'ERROR'
+    STATUS_CHOICES = [
+        (STATUS_PENDING, 'Ожидается'),
+        (STATUS_READY, 'Готов'),
+        (STATUS_ERROR, 'Ошибка'),
+    ]
+
+    store = models.ForeignKey(OzonStore, on_delete=models.CASCADE, related_name='performance_reports')
+    ozon_campaign_id = models.CharField(max_length=100, help_text='ID кампании в Ozon (campaignId)')
+
+    # UUID отчёта, возвращаемый после POST statistics/json
+    report_uuid = models.CharField(max_length=64, unique=True)
+
+    # Период отчёта (RFC 3339 в API; здесь сохраняем как DateTime)
+    date_from = models.DateTimeField()
+    date_to = models.DateTimeField()
+
+    # Служебные поля состояния
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    error_message = models.TextField(blank=True)
+    requested_at = models.DateTimeField(auto_now_add=True)
+    ready_at = models.DateTimeField(null=True, blank=True)
+    last_checked_at = models.DateTimeField(null=True, blank=True)
+
+    # Полезные данные
+    request_payload = models.JSONField(null=True, blank=True, help_text='Тело запроса на построение отчёта')
+    raw_response = models.JSONField(null=True, blank=True, help_text='Полный ответ отчёта как есть')
+    totals = models.JSONField(null=True, blank=True, help_text='Сводные метрики отчёта (report.totals)')
+    rows = models.JSONField(null=True, blank=True, help_text='Строки отчёта (report.rows)')
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['store', 'ozon_campaign_id']),
+            models.Index(fields=['report_uuid']),
+            models.Index(fields=['date_from', 'date_to']),
+        ]
+        unique_together = (
+            ('store', 'ozon_campaign_id', 'date_from', 'date_to'),
+        )
+        verbose_name = 'Отчёт Performance API'
+        verbose_name_plural = 'Отчёты Performance API'
+
+    def __str__(self):
+        return f"Report {self.ozon_campaign_id} [{self.date_from:%Y-%m-%d}..{self.date_to:%Y-%m-%d}] ({self.status})"
     @property
     def is_active(self):
         """Проверяет, активна ли кампания"""
