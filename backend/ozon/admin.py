@@ -4,7 +4,7 @@ from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
 from datetime import timedelta, date as dt_date
 from .models import (Product, WarehouseStock, Sale, FbsStock, Category, DeliveryCluster, DeliveryClusterItemAnalytics,
-                     DeliveryAnalyticsSummary, ProductDailyAnalytics, AdPlanItem, ManualCampaign)
+                     DeliveryAnalyticsSummary, ProductDailyAnalytics, AdPlanItem, ManualCampaign, CampaignPerformanceReport)
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
@@ -273,3 +273,20 @@ class ManualCampaignAdmin(admin.ModelAdmin):
         }),
     )
     
+@admin.register(CampaignPerformanceReport)
+class CampaignPerformanceReportAdmin(admin.ModelAdmin):
+    list_display = (
+        'id', 'store', 'ozon_campaign_id', 'report_uuid', 'status',
+        'date_from', 'date_to', 'requested_at', 'ready_at'
+    )
+    list_filter = (
+        'status', 'store',
+        ('date_from', DateFieldListFilter),
+        ('date_to', DateFieldListFilter),
+        ('requested_at', DateFieldListFilter),
+        ('ready_at', DateFieldListFilter),
+    )
+    search_fields = ('report_uuid', 'ozon_campaign_id', 'store__name', 'store__client_id')
+    ordering = ('-requested_at',)
+    readonly_fields = ('requested_at', 'ready_at', 'last_checked_at')
+    date_hierarchy = 'date_from'
