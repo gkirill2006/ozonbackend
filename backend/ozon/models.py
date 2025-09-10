@@ -579,6 +579,35 @@ class CampaignPerformanceReport(models.Model):
 
     def __str__(self):
         return f"Report {self.ozon_campaign_id} [{self.date_from:%Y-%m-%d}..{self.date_to:%Y-%m-%d}] ({self.status})"
+
+
+class CampaignPerformanceReportEntry(models.Model):
+    """
+    Детализация отчёта по конкретной кампании внутри CampaignPerformanceReport.
+    Поддерживает случаи, когда один UUID содержит несколько кампаний.
+    """
+
+    report = models.ForeignKey(CampaignPerformanceReport, on_delete=models.CASCADE, related_name='entries')
+    ozon_campaign_id = models.CharField(max_length=100)
+
+    totals = models.JSONField(null=True, blank=True)
+    rows = models.JSONField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['ozon_campaign_id']),
+        ]
+        unique_together = (
+            ('report', 'ozon_campaign_id'),
+        )
+        verbose_name = 'Кампания в отчёте Performance'
+        verbose_name_plural = 'Кампании в отчёте Performance'
+
+    def __str__(self):
+        return f"Entry {self.ozon_campaign_id} of {self.report_id}"
     @property
     def is_active(self):
         """Проверяет, активна ли кампания"""

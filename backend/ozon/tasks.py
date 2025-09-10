@@ -141,6 +141,7 @@ def _rfc3339(dt: datetime) -> str:
     return dt_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
+#--------Performance: запросить отчёты за вчера — создаёт PENDING записи с UUID для периода 'вчера'---------------
 @shared_task(name="Performance: запросить отчёты за вчера")
 def submit_performance_report_requests(store_id: int | None = None):
     """
@@ -242,8 +243,10 @@ def submit_performance_report_requests(store_id: int | None = None):
                 errors += 1
 
     return {"created": created, "skipped": skipped, "errors": errors}
+#-------------------------------------
 
 
+#--------Performance: получить готовые отчёты — по UUID вытягивает результаты и помечает READY/ERROR---------------
 @shared_task(name="Performance: получить готовые отчёты")
 def fetch_performance_reports(max_reports: int = 50):
     """
@@ -287,12 +290,46 @@ def fetch_performance_reports(max_reports: int = 50):
 
             data = resp.json() if resp.text else {}
             obj.raw_response = data
-            # Парсим report.rows и report.totals. Возможны 2 формата:
-            # 1) { "report": { rows: [...], totals: {...} } }
-            # 2) { "<campaignId>": { title: ..., report: { ... } }, ... }
-            rep = data.get('report') or next((v.get('report') for v in data.values() if isinstance(v, dict) and 'report' in v), {})
-            obj.rows = rep.get('rows') if isinstance(rep.get('rows'), list) else None
-            obj.totals = rep.get('totals') if isinstance(rep.get('totals'), dict) else None
+
+            # Поддерживаем 2 формата: одиночный и множественный по кампаниям
+            from .models import CampaignPerformanceReportEntry as CPR_Entry
+            top_level_report = data.get('report')
+            if top_level_report:
+                # Считаем, что это одиночная кампания (или неизвестная) — используем parent.ozon_campaign_id
+                obj.rows = top_level_report.get('rows') if isinstance(top_level_report.get('rows'), list) else None
+                obj.totals = top_level_report.get('totals') if isinstance(top_level_report.get('totals'), dict) else None
+                # Создаём/обновляем entry для связанной кампании, если известно
+                camp_id = obj.ozon_campaign_id or ''
+                if camp_id:
+                    CPR_Entry.objects.update_or_create(
+                        report=obj,
+                        ozon_campaign_id=str(camp_id),
+                        defaults={
+                            'rows': obj.rows,
+                            'totals': obj.totals,
+                        }
+                    )
+            else:
+                # Ожидаем словарь { "<campaignId>": { title, report: { rows, totals } }, ... }
+                obj.rows = None
+                obj.totals = None
+                for cid, payload in data.items():
+                    if not isinstance(payload, dict):
+                        continue
+                    rep = payload.get('report') or {}
+                    rows = rep.get('rows') if isinstance(rep.get('rows'), list) else None
+                    totals = rep.get('totals') if isinstance(rep.get('totals'), dict) else None
+                    if rows is None and totals is None:
+                        continue
+                    CPR_Entry.objects.update_or_create(
+                        report=obj,
+                        ozon_campaign_id=str(cid),
+                        defaults={
+                            'rows': rows,
+                            'totals': totals,
+                        }
+                    )
+
             obj.status = CampaignPerformanceReport.STATUS_READY
             obj.ready_at = timezone.now()
             obj.save(update_fields=['raw_response', 'rows', 'totals', 'status', 'ready_at', 'last_checked_at'])
@@ -305,11 +342,10 @@ def fetch_performance_reports(max_reports: int = 50):
             failed += 1
 
     return {"processed": processed, "ready": ready, "failed": failed}
+#-------------------------------------
 
 
-# =============================
-# Performance API: эксперимент — 10 дневных отчётов по одной кампании
-# =============================
+#--------Performance: эксперимент — 10 дневных отчётов по одной кампании---------------
 
 def _make_aware(dt: datetime) -> datetime:
     try:
@@ -337,7 +373,13 @@ def _resolve_store_for_campaign(ozon_campaign_id: str, store_id: int | None = No
 
 
 @shared_task(name="Performance: эксперимент — запросить дневные отчёты по кампании")
-def submit_daily_reports_for_campaign(ozon_campaign_id: str, start_date: str, days: int = 10, store_id: int | None = None):
+def submit_daily_reports_for_campaign(
+    ozon_campaign_id: str,
+    start_date: str,
+    days: int = 10,
+    store_id: int | None = None,
+    poll_interval_sec: int = 10,
+):
     """
     Формирует N (по умолчанию 10) отчётов по одной кампании — по одному на каждый день, начиная с start_date.
     Использует параметры, аналогичные примеру: {"campaigns":[...], "dateFrom":"YYYY-MM-DD", "dateTo":"YYYY-MM-DD", "groupBy":"NO_GROUP_BY"}.
@@ -353,6 +395,7 @@ def submit_daily_reports_for_campaign(ozon_campaign_id: str, start_date: str, da
     # Токен Performance API
     token_info = get_store_performance_token(store)
     access_token = token_info.get('access_token')
+    logger.info(f"access_token = {access_token}")
     if not access_token:
         logger.error(f"[❌] Нет access_token для магазина {store}")
         return {"created": 0, "errors": 1}
@@ -384,39 +427,58 @@ def submit_daily_reports_for_campaign(ozon_campaign_id: str, start_date: str, da
             "dateTo": day_str,
             "groupBy": "NO_GROUP_BY",
         }
-        try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=30)
-            if resp.status_code not in (200, 201, 202):
-                logger.error(f"[❌] statistics/json {store}: {resp.status_code} {resp.text}")
-                errors += 1
-                continue
-            data = resp.json() if resp.text else {}
-            uuid_val = data.get('UUID') or data.get('uuid')
-            if not uuid_val:
-                logger.warning(f"[⚠️] Нет UUID в ответе для {day_str}: {data}")
-                errors += 1
+        # Бесконечные попытки для текущего дня, пока не получим UUID (учёт лимита 429)
+        while True:
+            try:
+                logger.info(f"[➡️ POST] /statistics/json for {store} campaign={ozon_campaign_id} day={day_str}")
+                resp = requests.post(url, headers=headers, json=payload, timeout=30)
+            except Exception as e:
+                logger.error(f"[❌] Ошибка сети/запроса для {day_str}: {e}")
+                time.sleep(poll_interval_sec)
                 continue
 
-            # Сохраняем запись отчёта
-            day_start = _make_aware(d.replace(hour=0, minute=0, second=0, microsecond=0))
-            day_end = _make_aware(d.replace(hour=23, minute=59, second=59, microsecond=999999))
-            obj, _ = CampaignPerformanceReport.objects.update_or_create(
-                store=store,
-                ozon_campaign_id=str(ozon_campaign_id),
-                date_from=day_start,
-                date_to=day_end,
-                defaults={
-                    'report_uuid': uuid_val,
-                    'status': CampaignPerformanceReport.STATUS_PENDING,
-                    'request_payload': payload,
-                }
-            )
-            created += 1
-            uuids.append(uuid_val)
-            logger.info(f"[📨] Запрошен отчёт UUID={uuid_val} для кампании {ozon_campaign_id} за {day_str}")
-        except Exception as e:
-            logger.error(f"[❌] Ошибка запроса отчёта за {day_str}: {e}")
-            errors += 1
+            if resp.status_code in (200, 201, 202):
+                data = resp.json() if resp.text else {}
+                uuid_val = data.get('UUID') or data.get('uuid')
+                if not uuid_val:
+                    logger.warning(f"[⚠️] Нет UUID в ответе для {day_str}: {data}. Повтор через {poll_interval_sec}s")
+                    time.sleep(poll_interval_sec)
+                    continue
+
+                # Сохраняем запись отчёта
+                day_start = _make_aware(d.replace(hour=0, minute=0, second=0, microsecond=0))
+                day_end = _make_aware(d.replace(hour=23, minute=59, second=59, microsecond=999999))
+                try:
+                    obj, _ = CampaignPerformanceReport.objects.update_or_create(
+                        store=store,
+                        ozon_campaign_id=str(ozon_campaign_id),
+                        date_from=day_start,
+                        date_to=day_end,
+                        defaults={
+                            'report_uuid': uuid_val,
+                            'status': CampaignPerformanceReport.STATUS_PENDING,
+                            'request_payload': payload,
+                        }
+                    )
+                    created += 1
+                    uuids.append(uuid_val)
+                    logger.info(f"[📨] Запрошен отчёт UUID={uuid_val} для кампании {ozon_campaign_id} за {day_str}")
+                    break  # переходим к следующему дню
+                except Exception as db_err:
+                    logger.error(f"[💾❌] Ошибка записи отчёта в БД за {day_str}: {db_err}. Повтор через {poll_interval_sec}s")
+                    time.sleep(poll_interval_sec)
+                    continue
+
+            # Обработка лимита 429 — ждём и повторяем тот же день
+            if resp.status_code == 429:
+                logger.info(f"[⏳] Лимит активных отчётов (429) для {day_str}. Ждём {poll_interval_sec}s и пробуем снова…")
+                time.sleep(poll_interval_sec)
+                continue
+
+            # Другие ошибки — лог и повтор через интервал (чтобы довести все дни)
+            logger.error(f"[❌] statistics/json {store}: {resp.status_code} {resp.text}. Повтор через {poll_interval_sec}s")
+            time.sleep(poll_interval_sec)
+            continue
 
     return {"created": created, "errors": errors, "uuids": uuids}
 
@@ -469,9 +531,41 @@ def fetch_daily_reports_for_campaign(ozon_campaign_id: str, store_id: int | None
 
             data = resp.json() if resp.text else {}
             obj.raw_response = data
-            rep = data.get('report') or next((v.get('report') for v in data.values() if isinstance(v, dict) and 'report' in v), {})
-            obj.rows = rep.get('rows') if isinstance(rep.get('rows'), list) else None
-            obj.totals = rep.get('totals') if isinstance(rep.get('totals'), dict) else None
+            from .models import CampaignPerformanceReportEntry as CPR_Entry
+            top_level_report = data.get('report')
+            if top_level_report:
+                obj.rows = top_level_report.get('rows') if isinstance(top_level_report.get('rows'), list) else None
+                obj.totals = top_level_report.get('totals') if isinstance(top_level_report.get('totals'), dict) else None
+                camp_id = obj.ozon_campaign_id or ''
+                if camp_id:
+                    CPR_Entry.objects.update_or_create(
+                        report=obj,
+                        ozon_campaign_id=str(camp_id),
+                        defaults={
+                            'rows': obj.rows,
+                            'totals': obj.totals,
+                        }
+                    )
+            else:
+                obj.rows = None
+                obj.totals = None
+                for cid, payload in data.items():
+                    if not isinstance(payload, dict):
+                        continue
+                    rep = payload.get('report') or {}
+                    rows = rep.get('rows') if isinstance(rep.get('rows'), list) else None
+                    totals = rep.get('totals') if isinstance(rep.get('totals'), dict) else None
+                    if rows is None and totals is None:
+                        continue
+                    CPR_Entry.objects.update_or_create(
+                        report=obj,
+                        ozon_campaign_id=str(cid),
+                        defaults={
+                            'rows': rows,
+                            'totals': totals,
+                        }
+                    )
+
             obj.status = CampaignPerformanceReport.STATUS_READY
             obj.ready_at = timezone.now()
             obj.save(update_fields=['raw_response', 'rows', 'totals', 'status', 'ready_at', 'last_checked_at'])
@@ -484,6 +578,7 @@ def fetch_daily_reports_for_campaign(ozon_campaign_id: str, store_id: int | None
             failed += 1
 
     return {"processed": processed, "ready": ready, "failed": failed}
+#-------------------------------------
 
 
 # Обновляем каталоги для всех магазинов
