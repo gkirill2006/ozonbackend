@@ -307,6 +307,185 @@ def fetch_performance_reports(max_reports: int = 50):
     return {"processed": processed, "ready": ready, "failed": failed}
 
 
+# =============================
+# Performance API: эксперимент — 10 дневных отчётов по одной кампании
+# =============================
+
+def _make_aware(dt: datetime) -> datetime:
+    try:
+        from django.utils import timezone as dj_tz
+        if dt.tzinfo is None:
+            return dj_tz.make_aware(dt, dj_tz.get_default_timezone())
+        return dt
+    except Exception:
+        return dt
+
+
+def _resolve_store_for_campaign(ozon_campaign_id: str, store_id: int | None = None):
+    if store_id:
+        return OzonStore.objects.filter(id=store_id).first()
+    # Пытаемся найти по ManualCampaign затем по AdPlanItem
+    mc = None
+    try:
+        mc = ManualCampaign.objects.filter(ozon_campaign_id=str(ozon_campaign_id)).select_related('store').first()
+    except Exception:
+        mc = None
+    if mc and mc.store:
+        return mc.store
+    ap = AdPlanItem.objects.filter(ozon_campaign_id=str(ozon_campaign_id)).select_related('store').first()
+    return ap.store if ap else None
+
+
+@shared_task(name="Performance: эксперимент — запросить дневные отчёты по кампании")
+def submit_daily_reports_for_campaign(ozon_campaign_id: str, start_date: str, days: int = 10, store_id: int | None = None):
+    """
+    Формирует N (по умолчанию 10) отчётов по одной кампании — по одному на каждый день, начиная с start_date.
+    Использует параметры, аналогичные примеру: {"campaigns":[...], "dateFrom":"YYYY-MM-DD", "dateTo":"YYYY-MM-DD", "groupBy":"NO_GROUP_BY"}.
+    """
+    from .models import CampaignPerformanceReport
+    from .utils import get_store_performance_token
+
+    store = _resolve_store_for_campaign(ozon_campaign_id, store_id)
+    if not store:
+        logger.error(f"[❌] Не удалось определить магазин для кампании {ozon_campaign_id}")
+        return {"created": 0, "errors": 1}
+
+    # Токен Performance API
+    token_info = get_store_performance_token(store)
+    access_token = token_info.get('access_token')
+    if not access_token:
+        logger.error(f"[❌] Нет access_token для магазина {store}")
+        return {"created": 0, "errors": 1}
+
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    url = "https://api-performance.ozon.ru:443/api/client/statistics/json"
+
+    # Парсим дату начала
+    try:
+        base = datetime.strptime(start_date, "%Y-%m-%d")
+    except Exception as e:
+        logger.error(f"[❌] Некорректная дата start_date='{start_date}': {e}")
+        return {"created": 0, "errors": 1}
+
+    created = 0
+    uuids = []
+    errors = 0
+
+    for i in range(int(days)):
+        d = base + timedelta(days=i)
+        day_str = d.strftime("%Y-%m-%d")
+        payload = {
+            "campaigns": [str(ozon_campaign_id)],
+            "dateFrom": day_str,
+            "dateTo": day_str,
+            "groupBy": "NO_GROUP_BY",
+        }
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=30)
+            if resp.status_code not in (200, 201, 202):
+                logger.error(f"[❌] statistics/json {store}: {resp.status_code} {resp.text}")
+                errors += 1
+                continue
+            data = resp.json() if resp.text else {}
+            uuid_val = data.get('UUID') or data.get('uuid')
+            if not uuid_val:
+                logger.warning(f"[⚠️] Нет UUID в ответе для {day_str}: {data}")
+                errors += 1
+                continue
+
+            # Сохраняем запись отчёта
+            day_start = _make_aware(d.replace(hour=0, minute=0, second=0, microsecond=0))
+            day_end = _make_aware(d.replace(hour=23, minute=59, second=59, microsecond=999999))
+            obj, _ = CampaignPerformanceReport.objects.update_or_create(
+                store=store,
+                ozon_campaign_id=str(ozon_campaign_id),
+                date_from=day_start,
+                date_to=day_end,
+                defaults={
+                    'report_uuid': uuid_val,
+                    'status': CampaignPerformanceReport.STATUS_PENDING,
+                    'request_payload': payload,
+                }
+            )
+            created += 1
+            uuids.append(uuid_val)
+            logger.info(f"[📨] Запрошен отчёт UUID={uuid_val} для кампании {ozon_campaign_id} за {day_str}")
+        except Exception as e:
+            logger.error(f"[❌] Ошибка запроса отчёта за {day_str}: {e}")
+            errors += 1
+
+    return {"created": created, "errors": errors, "uuids": uuids}
+
+
+@shared_task(name="Performance: эксперимент — получить дневные отчёты по кампании")
+def fetch_daily_reports_for_campaign(ozon_campaign_id: str, store_id: int | None = None, max_reports: int = 10):
+    """
+    Забирает готовые отчёты по указанной кампании (PENDING → READY/ERROR), максимум max_reports за запуск.
+    """
+    from .models import CampaignPerformanceReport
+    from .utils import get_store_performance_token
+
+    # Режим выборки по кампании (и по магазину, если задан)
+    qs = CampaignPerformanceReport.objects.filter(
+        ozon_campaign_id=str(ozon_campaign_id),
+        status=CampaignPerformanceReport.STATUS_PENDING,
+    ).order_by('requested_at')
+    if store_id:
+        qs = qs.filter(store_id=store_id)
+
+    processed = 0
+    ready = 0
+    failed = 0
+
+    for obj in qs[:max_reports]:
+        processed += 1
+        obj.last_checked_at = timezone.now()
+        try:
+            store = obj.store
+            token_info = get_store_performance_token(store)
+            access_token = token_info.get('access_token')
+            if not access_token:
+                raise Exception("Нет access_token")
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/json",
+            }
+            url = f"https://api-performance.ozon.ru:443/api/client/statistics/report?UUID={obj.report_uuid}"
+            resp = requests.get(url, headers=headers, timeout=30)
+
+            if resp.status_code == 202:
+                obj.save(update_fields=['last_checked_at'])
+                continue
+            if resp.status_code != 200:
+                obj.status = CampaignPerformanceReport.STATUS_ERROR
+                obj.error_message = f"{resp.status_code} {resp.text}"
+                obj.save(update_fields=['status', 'error_message', 'last_checked_at'])
+                failed += 1
+                continue
+
+            data = resp.json() if resp.text else {}
+            obj.raw_response = data
+            rep = data.get('report') or next((v.get('report') for v in data.values() if isinstance(v, dict) and 'report' in v), {})
+            obj.rows = rep.get('rows') if isinstance(rep.get('rows'), list) else None
+            obj.totals = rep.get('totals') if isinstance(rep.get('totals'), dict) else None
+            obj.status = CampaignPerformanceReport.STATUS_READY
+            obj.ready_at = timezone.now()
+            obj.save(update_fields=['raw_response', 'rows', 'totals', 'status', 'ready_at', 'last_checked_at'])
+            ready += 1
+            logger.info(f"[📥] Получен отчёт UUID={obj.report_uuid} для кампании {ozon_campaign_id}")
+        except Exception as e:
+            obj.status = CampaignPerformanceReport.STATUS_ERROR
+            obj.error_message = str(e)
+            obj.save(update_fields=['status', 'error_message', 'last_checked_at'])
+            failed += 1
+
+    return {"processed": processed, "ready": ready, "failed": failed}
+
+
 # Обновляем каталоги для всех магазинов
 @shared_task(name="Обновление каталогов для всех магазинов")
 def sync_all_ozon_categories():
