@@ -273,11 +273,54 @@ class ManualCampaignAdmin(admin.ModelAdmin):
         }),
     )
     
+class CampaignPerformanceReportEntryInline(admin.TabularInline):
+    model = CampaignPerformanceReportEntry
+    extra = 0
+    can_delete = False
+    fields = (
+        'ozon_campaign_id', 'row_count', 'views', 'clicks', 'money_spent', 'orders', 'ctr', 'drr',
+    )
+    readonly_fields = fields
+
+    def _get_num(self, obj, key):
+        v = (obj.totals or {}).get(key)
+        if v is None:
+            return ''
+        s = str(v).replace('\u00A0', '').replace('\u202F', '').replace(' ', '').replace(',', '.')
+        try:
+            return float(s)
+        except Exception:
+            return s
+
+    def row_count(self, obj):
+        rows = obj.rows or []
+        return len(rows) if isinstance(rows, list) else 0
+
+    def views(self, obj):
+        return self._get_num(obj, 'views')
+
+    def clicks(self, obj):
+        return self._get_num(obj, 'clicks')
+
+    def money_spent(self, obj):
+        return self._get_num(obj, 'moneySpent')
+
+    def orders(self, obj):
+        return self._get_num(obj, 'orders')
+
+    def ctr(self, obj):
+        return self._get_num(obj, 'ctr')
+
+    def drr(self, obj):
+        return self._get_num(obj, 'drr')
+
+
 @admin.register(CampaignPerformanceReport)
 class CampaignPerformanceReportAdmin(admin.ModelAdmin):
     list_display = (
         'id', 'store', 'ozon_campaign_id', 'report_uuid', 'status',
-        'date_from', 'date_to', 'requested_at', 'ready_at'
+        'date_from', 'date_to', 'requested_at', 'ready_at', 'entries_count',
+        'totals_views', 'totals_clicks', 'totals_money_spent', 'totals_orders'
     )
     list_filter = (
         'status', 'store',
@@ -290,11 +333,39 @@ class CampaignPerformanceReportAdmin(admin.ModelAdmin):
     ordering = ('-requested_at',)
     readonly_fields = ('requested_at', 'ready_at', 'last_checked_at')
     date_hierarchy = 'date_from'
+    inlines = [CampaignPerformanceReportEntryInline]
+
+    def entries_count(self, obj):
+        return obj.entries.count()
+
+    def _get_num(self, obj, key):
+        v = (obj.totals or {}).get(key)
+        if v is None:
+            return ''
+        s = str(v).replace('\u00A0', '').replace('\u202F', '').replace(' ', '').replace(',', '.')
+        try:
+            return float(s)
+        except Exception:
+            return s
+
+    def totals_views(self, obj):
+        return self._get_num(obj, 'views')
+
+    def totals_clicks(self, obj):
+        return self._get_num(obj, 'clicks')
+
+    def totals_money_spent(self, obj):
+        return self._get_num(obj, 'moneySpent')
+
+    def totals_orders(self, obj):
+        return self._get_num(obj, 'orders')
 
 @admin.register(CampaignPerformanceReportEntry)
 class CampaignPerformanceReportEntryAdmin(admin.ModelAdmin):
     list_display = (
-        'id', 'report', 'ozon_campaign_id', 'created_at', 'updated_at'
+        'id', 'report', 'ozon_campaign_id', 'row_count',
+        'views', 'clicks', 'money_spent', 'orders', 'ctr', 'drr',
+        'created_at', 'updated_at'
     )
     list_filter = (
         ('created_at', DateFieldListFilter),
@@ -302,3 +373,35 @@ class CampaignPerformanceReportEntryAdmin(admin.ModelAdmin):
     )
     search_fields = ('ozon_campaign_id', 'report__report_uuid')
     ordering = ('-created_at',)
+
+    def _get_num(self, obj, key):
+        v = (obj.totals or {}).get(key)
+        if v is None:
+            return ''
+        s = str(v).replace('\u00A0', '').replace('\u202F', '').replace(' ', '').replace(',', '.')
+        try:
+            return float(s)
+        except Exception:
+            return s
+
+    def row_count(self, obj):
+        rows = obj.rows or []
+        return len(rows) if isinstance(rows, list) else 0
+
+    def views(self, obj):
+        return self._get_num(obj, 'views')
+
+    def clicks(self, obj):
+        return self._get_num(obj, 'clicks')
+
+    def money_spent(self, obj):
+        return self._get_num(obj, 'moneySpent')
+
+    def orders(self, obj):
+        return self._get_num(obj, 'orders')
+
+    def ctr(self, obj):
+        return self._get_num(obj, 'ctr')
+
+    def drr(self, obj):
+        return self._get_num(obj, 'drr')
