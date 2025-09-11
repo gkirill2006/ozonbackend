@@ -226,7 +226,7 @@ class AdPlanItemAdmin(admin.ModelAdmin):
     )
     list_filter = ('abc_label', 'store', 'campaign_type', 'state', 'payment_type', 'has_existing_campaign', 'is_active_in_sheets')
     search_fields = ('sku', 'offer_id', 'ozon_campaign_id', 'campaign_name', 'store__name')
-    ordering = ('-created_at',)
+    ordering = ('report__date_from', 'ozon_campaign_id')
     readonly_fields = ('created_at',)
 
 
@@ -246,7 +246,7 @@ class ManualCampaignAdmin(admin.ModelAdmin):
         ('updated_at', DateFieldListFilter),
     )
     search_fields = ('name', 'ozon_campaign_id', 'sku', 'offer_id', 'store__name', 'sku_list')
-    ordering = ('-created_at',)
+    ordering = ('report__date_from', 'ozon_campaign_id', 'id')
     readonly_fields = ('created_at', 'updated_at')
     
     fieldsets = (
@@ -278,7 +278,7 @@ class CampaignPerformanceReportEntryInline(admin.TabularInline):
     extra = 0
     can_delete = False
     fields = (
-        'ozon_campaign_id', 'row_count', 'views', 'clicks', 'money_spent', 'orders', 'ctr', 'drr',
+        'ozon_campaign_id', 'row_count', 'views', 'clicks', 'money_spent', 'orders', 'orders_money', 'ctr', 'drr',
     )
     readonly_fields = fields
 
@@ -308,6 +308,9 @@ class CampaignPerformanceReportEntryInline(admin.TabularInline):
     def orders(self, obj):
         return self._get_num(obj, 'orders')
 
+    def orders_money(self, obj):
+        return self._get_num(obj, 'ordersMoney')
+
     def ctr(self, obj):
         return self._get_num(obj, 'ctr')
 
@@ -320,7 +323,7 @@ class CampaignPerformanceReportAdmin(admin.ModelAdmin):
     list_display = (
         'id', 'store', 'ozon_campaign_id', 'report_uuid', 'status',
         'date_from', 'date_to', 'requested_at', 'ready_at', 'entries_count',
-        'totals_views', 'totals_clicks', 'totals_money_spent', 'totals_orders'
+        'totals_views', 'totals_clicks', 'totals_money_spent', 'totals_orders', 'totals_orders_money'
     )
     list_filter = (
         'status', 'store',
@@ -360,14 +363,19 @@ class CampaignPerformanceReportAdmin(admin.ModelAdmin):
     def totals_orders(self, obj):
         return self._get_num(obj, 'orders')
 
+    def totals_orders_money(self, obj):
+        return self._get_num(obj, 'ordersMoney')
+
 @admin.register(CampaignPerformanceReportEntry)
 class CampaignPerformanceReportEntryAdmin(admin.ModelAdmin):
     list_display = (
-        'id', 'report', 'ozon_campaign_id', 'row_count',
-        'views', 'clicks', 'money_spent', 'orders', 'ctr', 'drr',
+        'id', 'report_date_from', 'report_date_to', 'ozon_campaign_id', 'row_count',
+        'views', 'clicks', 'money_spent', 'orders', 'orders_money', 'ctr', 'drr',
         'created_at', 'updated_at'
     )
     list_filter = (
+        ('report__date_from', DateFieldListFilter),
+        ('report__date_to', DateFieldListFilter),
         ('created_at', DateFieldListFilter),
         ('updated_at', DateFieldListFilter),
     )
@@ -400,8 +408,22 @@ class CampaignPerformanceReportEntryAdmin(admin.ModelAdmin):
     def orders(self, obj):
         return self._get_num(obj, 'orders')
 
+    def orders_money(self, obj):
+        return self._get_num(obj, 'ordersMoney')
+
     def ctr(self, obj):
         return self._get_num(obj, 'ctr')
 
     def drr(self, obj):
         return self._get_num(obj, 'drr')
+
+    # Период отчёта из связанного Report
+    def report_date_from(self, obj):
+        return obj.report.date_from.date() if obj.report and obj.report.date_from else ''
+    report_date_from.short_description = 'Date From'
+    report_date_from.admin_order_field = 'report__date_from'
+
+    def report_date_to(self, obj):
+        return obj.report.date_to.date() if obj.report and obj.report.date_to else ''
+    report_date_to.short_description = 'Date To'
+    report_date_to.admin_order_field = 'report__date_to'

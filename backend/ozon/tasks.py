@@ -483,6 +483,243 @@ def submit_daily_reports_for_campaign(
     return {"created": created, "errors": errors, "uuids": uuids}
 
 
+#--------Performance: прод — запросить дневной отчёт по всем авто-кампаниям---------------
+@shared_task(name="Performance: прод — запросить дневной отчёт по всем авто-кампаниям")
+def submit_auto_reports_for_day(date_str: str, store_id: int | None = None, batch_size: int = 50, retry_interval_sec: int = 10):
+    """
+    Формирует отчёт за один день по всем автоматическим кампаниям (AdPlanItem) по магазинам, с ретраями 429.
+    """
+    from .utils import get_store_performance_token
+    from .models import CampaignPerformanceReport
+
+    try:
+        base = datetime.strptime(date_str, "%Y-%m-%d")
+    except Exception as e:
+        logger.error(f"[❌] Некорректная дата date_str='{date_str}': {e}")
+        return {"created": 0, "errors": 1}
+    day_start = _make_aware(base.replace(hour=0, minute=0, second=0, microsecond=0))
+    day_end = _make_aware(base.replace(hour=23, minute=59, second=59, microsecond=999999))
+
+    stores_qs = OzonStore.objects.all()
+    if store_id:
+        stores_qs = stores_qs.filter(id=store_id)
+
+    created = 0
+    errors = 0
+    uuids = []
+
+    for store in stores_qs:
+        # Собираем все campaign_id из AdPlanItem
+        all_ids = list(
+            AdPlanItem.objects.filter(store=store)
+            .exclude(ozon_campaign_id__isnull=True)
+            .exclude(ozon_campaign_id='')
+            .values_list('ozon_campaign_id', flat=True)
+        )
+        if not all_ids:
+            continue
+
+        # Авторизация
+        try:
+            token_info = get_store_performance_token(store)
+            access_token = token_info.get('access_token')
+            if not access_token:
+                raise Exception("Нет access_token")
+        except Exception as e:
+            logger.error(f"[❌] Токен Performance не получен для {store}: {e}")
+            errors += 1
+            continue
+
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        url = "https://api-performance.ozon.ru:443/api/client/statistics/json"
+
+        # Батчами по batch_size
+        for i in range(0, len(all_ids), batch_size):
+            batch = [str(x) for x in all_ids[i:i + batch_size]]
+            payload = {
+                "campaigns": batch,
+                "dateFrom": date_str,
+                "dateTo": date_str,
+                "groupBy": "NO_GROUP_BY",
+            }
+
+            # Ретраим текущий батч, пока не получим UUID
+            while True:
+                try:
+                    logger.info(f"[➡️ POST] /statistics/json {store} batch={len(batch)} for {date_str}")
+                    resp = requests.post(url, headers=headers, json=payload, timeout=30)
+                except Exception as e:
+                    logger.error(f"[❌] Ошибка сети/запроса: {e}. Retry {retry_interval_sec}s…")
+                    time.sleep(retry_interval_sec)
+                    continue
+
+                if resp.status_code in (200, 201, 202):
+                    data = resp.json() if resp.text else {}
+                    uuid_val = data.get('UUID') or data.get('uuid')
+                    if not uuid_val:
+                        logger.warning(f"[⚠️] Нет UUID в ответе: {data}. Retry {retry_interval_sec}s…")
+                        time.sleep(retry_interval_sec)
+                        continue
+
+                    # Сохраняем PENDING отчёт; помечаем как MULTI для parent (детализация попадёт в entries)
+                    try:
+                        obj, _ = CampaignPerformanceReport.objects.update_or_create(
+                            store=store,
+                            ozon_campaign_id='MULTI',
+                            date_from=day_start,
+                            date_to=day_end,
+                            defaults={
+                                'report_uuid': uuid_val,
+                                'status': CampaignPerformanceReport.STATUS_PENDING,
+                                'request_payload': payload,
+                            }
+                        )
+                        created += 1
+                        uuids.append(uuid_val)
+                        logger.info(f"[📨] UUID={uuid_val} сохранён (store={store}, batch={len(batch)}, {date_str})")
+                    except Exception as db_err:
+                        logger.error(f"[💾❌] Ошибка записи отчёта в БД: {db_err}. Retry {retry_interval_sec}s…")
+                        time.sleep(retry_interval_sec)
+                        continue
+                    break  # идём к следующему батчу
+
+                if resp.status_code == 429:
+                    logger.info(f"[⏳] 429 лимит активных отчётов для {store}. Ждём {retry_interval_sec}s и пробуем снова…")
+                    time.sleep(retry_interval_sec)
+                    continue
+
+                logger.error(f"[❌] statistics/json {store}: {resp.status_code} {resp.text}. Retry {retry_interval_sec}s…")
+                time.sleep(retry_interval_sec)
+                continue
+
+    return {"created": created, "errors": errors, "uuids": uuids}
+#-------------------------------------
+
+
+#--------Performance: прод — запросить дневной отчёт по списку кампаний---------------
+@shared_task(name="Performance: прод — запросить дневной отчёт по списку кампаний")
+def submit_reports_for_campaigns(campaign_ids: list[str], date_str: str, store_id: int, retry_interval_sec: int = 10):
+    """
+    Версия для явного списка campaign_id (для одного магазина). С ретраями 429.
+    """
+    if not campaign_ids:
+        return {"created": 0, "errors": 0, "uuids": []}
+    try:
+        base = datetime.strptime(date_str, "%Y-%m-%d")
+    except Exception as e:
+        logger.error(f"[❌] Некорректная дата date_str='{date_str}': {e}")
+        return {"created": 0, "errors": 1}
+    day_start = _make_aware(base.replace(hour=0, minute=0, second=0, microsecond=0))
+    day_end = _make_aware(base.replace(hour=23, minute=59, second=59, microsecond=999999))
+
+    store = OzonStore.objects.filter(id=store_id).first()
+    if not store:
+        return {"created": 0, "errors": 1, "message": "store not found"}
+
+    from .utils import get_store_performance_token
+    from .models import CampaignPerformanceReport
+
+    try:
+        token_info = get_store_performance_token(store)
+        access_token = token_info.get('access_token')
+        if not access_token:
+            raise Exception("Нет access_token")
+    except Exception as e:
+        logger.error(f"[❌] Токен Performance не получен для {store}: {e}")
+        return {"created": 0, "errors": 1}
+
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    url = "https://api-performance.ozon.ru:443/api/client/statistics/json"
+    batch = [str(x) for x in campaign_ids]
+    payload = {
+        "campaigns": batch,
+        "dateFrom": date_str,
+        "dateTo": date_str,
+        "groupBy": "NO_GROUP_BY",
+    }
+
+    uuids = []
+    created = 0
+    errors = 0
+
+    while True:
+        try:
+            logger.info(f"[➡️ POST] /statistics/json {store} campaigns={len(batch)} for {date_str}")
+            resp = requests.post(url, headers=headers, json=payload, timeout=30)
+        except Exception as e:
+            logger.error(f"[❌] Ошибка сети/запроса: {e}. Retry {retry_interval_sec}s…")
+            time.sleep(retry_interval_sec)
+            continue
+
+        if resp.status_code in (200, 201, 202):
+            data = resp.json() if resp.text else {}
+            uuid_val = data.get('UUID') or data.get('uuid')
+            if not uuid_val:
+                logger.warning(f"[⚠️] Нет UUID в ответе: {data}. Retry {retry_interval_sec}s…")
+                time.sleep(retry_interval_sec)
+                continue
+            try:
+                obj, _ = CampaignPerformanceReport.objects.update_or_create(
+                    store=store,
+                    ozon_campaign_id='MULTI',
+                    date_from=day_start,
+                    date_to=day_end,
+                    defaults={
+                        'report_uuid': uuid_val,
+                        'status': CampaignPerformanceReport.STATUS_PENDING,
+                        'request_payload': payload,
+                    }
+                )
+                created += 1
+                uuids.append(uuid_val)
+                logger.info(f"[📨] UUID={uuid_val} сохранён (store={store}, campaigns={len(batch)}, {date_str})")
+            except Exception as db_err:
+                logger.error(f"[💾❌] Ошибка записи отчёта в БД: {db_err}. Retry {retry_interval_sec}s…")
+                time.sleep(retry_interval_sec)
+                continue
+            break
+
+        if resp.status_code == 429:
+            logger.info(f"[⏳] 429 лимит активных отчётов. Ждём {retry_interval_sec}s и пробуем снова…")
+            time.sleep(retry_interval_sec)
+            continue
+
+        logger.error(f"[❌] statistics/json {store}: {resp.status_code} {resp.text}. Retry {retry_interval_sec}s…")
+        time.sleep(retry_interval_sec)
+        continue
+
+    return {"created": created, "errors": errors, "uuids": uuids}
+#-------------------------------------
+
+
+#--------Performance: прод — обёртка на вчерашний день (все авто-кампании)---------------
+@shared_task(name="Performance: прод — дневной отчёт за вчера (все авто-кампании)")
+def submit_auto_reports_for_yesterday(store_id: int | None = None, batch_size: int = 50, retry_interval_sec: int = 10):
+    """
+    Запрашивает отчёт за вчерашний день по всем автоматическим кампаниям (через submit_auto_reports_for_day).
+    """
+    date_str = (timezone.localdate() - timedelta(days=1)).strftime("%Y-%m-%d")
+    return submit_auto_reports_for_day(date_str, store_id=store_id, batch_size=batch_size, retry_interval_sec=retry_interval_sec)
+#-------------------------------------
+
+
+#--------Performance: прод — обёртка на сегодня (все авто-кампании)---------------
+@shared_task(name="Performance: прод — дневной отчёт за сегодня (все авто-кампании)")
+def submit_auto_reports_for_today(store_id: int | None = None, batch_size: int = 50, retry_interval_sec: int = 10):
+    """
+    Запрашивает отчёт за текущий день по всем автоматическим кампаниям (через submit_auto_reports_for_day).
+    """
+    date_str = timezone.localdate().strftime("%Y-%m-%d")
+    return submit_auto_reports_for_day(date_str, store_id=store_id, batch_size=batch_size, retry_interval_sec=retry_interval_sec)
+#-------------------------------------
 @shared_task(name="Performance: эксперимент — получить дневные отчёты по кампании")
 def fetch_daily_reports_for_campaign(ozon_campaign_id: str, store_id: int | None = None, max_reports: int = 10):
     """
