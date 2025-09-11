@@ -226,7 +226,7 @@ class AdPlanItemAdmin(admin.ModelAdmin):
     )
     list_filter = ('abc_label', 'store', 'campaign_type', 'state', 'payment_type', 'has_existing_campaign', 'is_active_in_sheets')
     search_fields = ('sku', 'offer_id', 'ozon_campaign_id', 'campaign_name', 'store__name')
-    ordering = ('report__date_from', 'ozon_campaign_id')
+    ordering = ('-created_at',)
     readonly_fields = ('created_at',)
 
 
@@ -246,7 +246,7 @@ class ManualCampaignAdmin(admin.ModelAdmin):
         ('updated_at', DateFieldListFilter),
     )
     search_fields = ('name', 'ozon_campaign_id', 'sku', 'offer_id', 'store__name', 'sku_list')
-    ordering = ('report__date_from', 'ozon_campaign_id', 'id')
+    ordering = ('-created_at',)
     readonly_fields = ('created_at', 'updated_at')
     
     fieldsets = (
@@ -380,7 +380,7 @@ class CampaignPerformanceReportEntryAdmin(admin.ModelAdmin):
         ('updated_at', DateFieldListFilter),
     )
     search_fields = ('ozon_campaign_id', 'report__report_uuid')
-    ordering = ('-created_at',)
+    ordering = ('report__date_from', 'ozon_campaign_id', 'id')
 
     def _get_num(self, obj, key):
         v = (obj.totals or {}).get(key)
@@ -422,8 +422,10 @@ class CampaignPerformanceReportEntryAdmin(admin.ModelAdmin):
         return obj.report.date_from.date() if obj.report and obj.report.date_from else ''
     report_date_from.short_description = 'Date From'
     report_date_from.admin_order_field = 'report__date_from'
+    report_date_from.admin_order_field = 'report__date_from'
 
     def report_date_to(self, obj):
         return obj.report.date_to.date() if obj.report and obj.report.date_to else ''
     report_date_to.short_description = 'Date To'
+    report_date_to.admin_order_field = 'report__date_to'
     report_date_to.admin_order_field = 'report__date_to'
