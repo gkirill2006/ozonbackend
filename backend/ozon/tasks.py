@@ -866,7 +866,7 @@ def sync_product_daily_analytics():
 # GOOGLE SHEETS: ABC отчёт
 # =========================
 @shared_task(name="Обновление листа ABC1 из ProductDailyAnalytics")
-def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None):
+def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, consider_spent: int = 0):
     """
     Обновляет лист ABC из ProductDailyAnalytics.
     """
@@ -1243,8 +1243,46 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None):
         ws_main.update('B4', [[float(total_revenue)]])
         # Рекламный бюджет за +1 период: total_revenue * promo_budget_pct (уже доля 0..1)
         budget_total = total_revenue * promo_budget_pct
-        budget_total_ONE_WEEK = budget_total / Decimal('4')
-        budget_total_ONE_DAY = budget_total_ONE_WEEK / Decimal('7')
+
+        # Если нужно, учитываем уже потраченный бюджет с начала текущего месяца
+        if int(consider_spent or 0) == 1:
+            try:
+                from .models import CampaignPerformanceReportEntry
+                # Начало текущего месяца (1-е число)
+                since_date_consider = timezone.localdate().replace(day=1)
+                spent_sum = Decimal('0')
+                for _e in CampaignPerformanceReportEntry.objects.filter(
+                    report__store=store,
+                    report__date_from__date__gte=since_date_consider,
+                    report__date_from__date__lte=timezone.localdate(),
+                ).iterator():
+                    _tot = _e.totals or {}
+                    s = str(_tot.get('moneySpent') or '').replace('\u00A0','').replace('\u202F','').replace(' ','').replace(',', '.')
+                    try:
+                        spent_sum += Decimal(s)
+                    except Exception:
+                        continue
+                logger.info(f"[♻️] Учитываем уже потраченное с {since_date_consider}: {spent_sum}")
+                budget_total = max(Decimal('0'), budget_total - spent_sum)
+            except Exception as _e:
+                logger.warning(f"[⚠️] Не удалось учесть потраченный бюджет: {_e}")
+        # Расчёт недельного/дневного бюджета
+        # Если учитываем уже потраченное, распределяем остаток на оставшиеся дни месяца,
+        # иначе используем месячную схему (делим на 4 недели)
+        if int(consider_spent or 0) == 1:
+            today = timezone.localdate()
+            # последний день текущего месяца
+            next_month = (today.replace(day=28) + timedelta(days=4)).replace(day=1)
+            end_of_month = next_month - timedelta(days=1)
+            days_left = (end_of_month - today).days + 1
+            if days_left <= 0:
+                days_left = 1
+            budget_total_ONE_DAY = (budget_total / Decimal(str(days_left))).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            budget_total_ONE_WEEK = (budget_total_ONE_DAY * Decimal('7')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            logger.info(f"[📆] consider_spent=1: days_left={days_left}; week={budget_total_ONE_WEEK}, day={budget_total_ONE_DAY}")
+        else:
+            budget_total_ONE_WEEK = budget_total / Decimal('4')
+            budget_total_ONE_DAY = budget_total_ONE_WEEK / Decimal('7')
         
         # Сохраняем недельный бюджет ДО корректировки для записи в C6
         budget_total_ONE_WEEK_original = budget_total_ONE_WEEK
@@ -2220,7 +2258,7 @@ def fetch_campaign_objects_from_ozon(store: OzonStore, campaign_id: str) -> list
 
 
 @shared_task(name="Чтение данных из Google Sheets и создание рекламной компании")
-def read_google_sheets_data(spreadsheet_url: str = None, sa_json_path: str = None, worksheet_name: str = "Main_ADV", start_row: int = 13, block_size: int = 100):
+def create_or_update_AD(spreadsheet_url: str = None, sa_json_path: str = None, worksheet_name: str = "Main_ADV", start_row: int = 13, block_size: int = 100):
     """
     Читает данные из Google Sheets до тех пор, пока не встретит 5 пустых строк подряд.
     
@@ -2253,6 +2291,7 @@ def read_google_sheets_data(spreadsheet_url: str = None, sa_json_path: str = Non
         # Открываем таблицу и лист
         sh = gc.open_by_url(spreadsheet_url)
         ws = sh.worksheet(worksheet_name)
+
         t_open = time.perf_counter()
         logger.info(f"[⏱] Открытие таблицы: {t_open - t0:.3f}s")
         
@@ -2560,48 +2599,44 @@ def read_google_sheets_data(spreadsheet_url: str = None, sa_json_path: str = Non
                         campaign_age_days = (timezone.now() - auto_campaign.created_at).days
                         logger.debug(f"[📅] Кампания {campaign_id} создана {campaign_age_days} дней назад, время обучения: {train_days} дней")
                         
-                        if campaign_age_days >= train_days:
-                            # Кампания старше времени обучения - обновляем бюджет
-                            try:
-                                week_budget = ad_data['week_budget']
-                                week_budget_str = str(week_budget).strip().replace(' ', '').replace('\xa0', '').replace('\u00A0', '').replace('\u202f', '').replace('\u202F', '').replace(',', '.') if week_budget else '0'
-                                week_budget_float = float(week_budget_str) if week_budget_str else 0.0
+
+                        try:
+                            week_budget = ad_data['week_budget']
+                            week_budget_str = str(week_budget).strip().replace(' ', '').replace('\xa0', '').replace('\u00A0', '').replace('\u202f', '').replace('\u202F', '').replace(',', '.') if week_budget else '0'
+                            week_budget_float = float(week_budget_str) if week_budget_str else 0.0
+                            
+                            if week_budget_float > 0:
+                                logger.info(f"[🔄] Обновляем бюджет кампании {campaign_id}: {auto_campaign.week_budget} -> {week_budget_float}")
                                 
-                                if week_budget_float > 0:
-                                    logger.info(f"[🔄] Обновляем бюджет кампании {campaign_id}: {auto_campaign.week_budget} -> {week_budget_float}")
+                                # Обновляем бюджет через API Ozon
+                                try:
+                                    api_response = update_campaign_budget(
+                                        access_token=access_token,
+                                        campaign_id=campaign_id,
+                                        weekly_budget_rub=week_budget_float
+                                    )
+                                    logger.info(f"[🌐] API Ozon: бюджет кампании {campaign_id} обновлен успешно")
                                     
-                                    # Обновляем бюджет через API Ozon
-                                    try:
-                                        api_response = update_campaign_budget(
-                                            access_token=access_token,
-                                            campaign_id=campaign_id,
-                                            weekly_budget_rub=week_budget_float
-                                        )
-                                        logger.info(f"[🌐] API Ozon: бюджет кампании {campaign_id} обновлен успешно")
-                                        
-                                        # Обновляем в базе данных только после успешного API вызова
-                                        auto_campaign.week_budget = week_budget_float
-                                        auto_campaign.day_budget = week_budget_float / 7
-                                        auto_campaign.save(update_fields=['week_budget', 'day_budget'])
-                                        
-                                        logger.info(f"[✅] Бюджет кампании {campaign_id} обновлен в базе данных")
-                                        campaigns_updated += 1  # Считаем как обновленную кампанию
-                                        
-                                    except Exception as api_error:
-                                        logger.error(f"[❌] Ошибка API при обновлении бюджета кампании {campaign_id}: {api_error}")
-                                        # Не обновляем базу данных при ошибке API
-                                        campaigns_skipped += 1
-                                else:
-                                    logger.warning(f"[⚠️] Строка {ad_data['row_number']}: некорректный бюджет для обновления: {week_budget}")
+                                    # Обновляем в базе данных только после успешного API вызова
+                                    auto_campaign.week_budget = week_budget_float
+                                    auto_campaign.day_budget = week_budget_float / 7
+                                    auto_campaign.save(update_fields=['week_budget', 'day_budget'])
+                                    
+                                    logger.info(f"[✅] Бюджет кампании {campaign_id} обновлен в базе данных")
+                                    campaigns_updated += 1  # Считаем как обновленную кампанию
+                                    
+                                except Exception as api_error:
+                                    logger.error(f"[❌] Ошибка API при обновлении бюджета кампании {campaign_id}: {api_error}")
+                                    # Не обновляем базу данных при ошибке API
                                     campaigns_skipped += 1
-                                    
-                            except Exception as update_error:
-                                logger.error(f"[❌] Ошибка при обновлении бюджета кампании {campaign_id}: {update_error}")
+                            else:
+                                logger.warning(f"[⚠️] Строка {ad_data['row_number']}: некорректный бюджет для обновления: {week_budget}")
                                 campaigns_skipped += 1
-                        else:
-                            # Кампания еще в периоде обучения
-                            logger.debug(f"[📚] Кампания {campaign_id} еще в периоде обучения ({campaign_age_days}/{train_days} дней), пропускаем")
+                                
+                        except Exception as update_error:
+                            logger.error(f"[❌] Ошибка при обновлении бюджета кампании {campaign_id}: {update_error}")
                             campaigns_skipped += 1
+
                     else:
                         # Кампания не найдена ни в ручных, ни в автоматических
                         logger.warning(f"[⚠️] Кампания {campaign_id} не найдена в базе данных (строка {ad_data['row_number']})")
@@ -2611,6 +2646,38 @@ def read_google_sheets_data(spreadsheet_url: str = None, sa_json_path: str = Non
                     logger.error(f"[❌] Ошибка при обработке существующей кампании {campaign_id} (строка {ad_data['row_number']}): {e}")
                     campaigns_skipped += 1
         
+        # Останавливаем в Ozon те авто-кампании из модели, которых нет в новом списке таблицы
+        try:
+            present_auto_ids = {
+                str(row.get('campaign_id')).strip()
+                for row in data_rows
+                if str(row.get('campaign_id')).strip() and str(row.get('campaign_type')).strip() == 'Авто'
+            }
+            stopped_count = 0
+            active_states = [
+                AdPlanItem.CAMPAIGN_STATE_RUNNING,
+                AdPlanItem.CAMPAIGN_STATE_ACTIVE,
+                AdPlanItem.CAMPAIGN_STATE_PLANNED,
+            ]
+            # Берём все авто-кампании магазина с ID
+            stale_ads = AdPlanItem.objects.filter(store=store).exclude(ozon_campaign_id='')
+            for ad in stale_ads:
+                cid = str(ad.ozon_campaign_id)
+                if cid not in present_auto_ids:
+                    try:
+                        # Деактивируем через Performance API
+                        deact_resp = deactivate_campaign(access_token=access_token, campaign_id=cid)
+                        _update_campaign_from_ozon_response(ad, deact_resp)
+                        ad.save(update_fields=['state', 'payment_type', 'total_budget', 'week_budget', 'day_budget', 'from_date', 'to_date', 'placement', 'product_autopilot_strategy', 'ozon_created_at', 'ozon_updated_at'])
+                        stopped_count += 1
+                        logger.info(f"[🛑] Отключили кампанию {cid}, отсутствует в листе")
+                    except Exception as e:
+                        logger.error(f"[❌] Ошибка деактивации кампании {cid}: {e}")
+            if stopped_count:
+                logger.info(f"[📉] Остановлено кампаний, отсутствующих в листе: {stopped_count}")
+        except Exception as e:
+            logger.error(f"[❌] Ошибка при остановке кампаний, отсутствующих в листе: {e}")
+
         logger.info(f"[📊] Обработка завершена: создано {campaigns_created} кампаний, обновлено {campaigns_updated} кампаний, пропущено {campaigns_skipped}")
         return data_rows
         
@@ -2620,10 +2687,20 @@ def read_google_sheets_data(spreadsheet_url: str = None, sa_json_path: str = Non
 
 
 @shared_task(name="Синхронизация активности кампаний с Google Sheets")
-def sync_campaign_activity_with_sheets(spreadsheet_url: str = None, sa_json_path: str = None, worksheet_name: str = "Main_ADV", start_row: int = 13, block_size: int = 100):
+def sync_campaign_activity_with_sheets(
+        spreadsheet_url: str = None,
+        sa_json_path: str = None,
+        worksheet_name: str = "Main_ADV",
+        start_row: int = 13,
+        block_size: int = 100,
+        override_training: int = 0,
+    ):
     """
     Сканирует Google Sheets для проверки активности кампаний (колонка B).
     Сверяет с базой данных и синхронизирует состояние кампаний в Ozon.
+    
+    Параметры:
+      - override_training: 0/1 — если 1, игнорирует период обучения train_days при обновлении ручного недельного бюджета
     
     Args:
         spreadsheet_url: URL Google таблицы
@@ -2689,12 +2766,12 @@ def sync_campaign_activity_with_sheets(spreadsheet_url: str = None, sa_json_path
         campaigns_skipped = 0
         budgets_updated = 0
         
-        logger.info(f"[📖] Начинаем чтение данных с строки {start_row} блоками по {block_size}")
+        logger.info(f"[📖] Начинаем чтение данных с строки {start_row} блоками по {block_size}; override_training={override_training}")
         
         while empty_rows_count < max_empty_rows:
             end_row = current_row + block_size - 1
             
-            # Читаем блок данных: A (campaign_id), B (active), C (sku), I (manual_budget)
+            # Читаем блок данных: A (campaign_id), B (active), C (sku), K (manual weekly budget)
             try:
                 range_name = f'A{current_row}:L{end_row}'
                 values = ws.get(range_name)
@@ -2776,16 +2853,22 @@ def sync_campaign_activity_with_sheets(spreadsheet_url: str = None, sa_json_path
                         action = "activate" if should_be_active else "deactivate"
                         logger.info(f"[🔄] Кампания {campaign_id}: несоответствие статуса Ozon {current_is_active} vs Sheets {should_be_active}")
                     
-                    # Проверяем изменения в ручном бюджете (колонка I)
+                    # Проверяем изменения в ручном бюджете (колонка K)
                     budget_updated = False
                     if manual_budget_value:
                         try:
-                            manual_budget_float = float(manual_budget_value)
-                            current_manual_budget = float(ad_plan_item.manual_budget)
+                            # Нормализуем формат числа из таблицы (пробелы/неразрывные/запятая)
+                            mb_str = manual_budget_value.replace(' ', '').replace('\xa0', '').replace('\u00A0', '').replace('\u202f', '').replace('\u202F', '').replace(',', '.')
+                            manual_budget_float = float(mb_str) if mb_str else 0.0
+                            current_manual_budget = float(ad_plan_item.manual_budget or 0)
+                            # Возраст кампании и дни обучения
+                            start_dt = ad_plan_item.ozon_created_at or ad_plan_item.created_at
+                            age_days = (timezone.now().date() - start_dt.date()).days if start_dt else 0
+                            train_days = int(ad_plan_item.train_days or 0)
                             
-                            # Если бюджеты отличаются, обновляем
+                            # Если бюджеты отличаются и (кампания прошла обучение или принудительное обновление включено), обновляем
                             if abs(manual_budget_float - current_manual_budget) > 0.01:  # Учитываем погрешность float
-                                logger.info(f"[💰] Кампания {campaign_id}: обновление ручного бюджета {current_manual_budget} -> {manual_budget_float}")
+                                logger.info(f"[💰] Кампания {campaign_id}: обновление ручного недельного бюджета {current_manual_budget} -> {manual_budget_float}")
                                 
                                 try:
                                     # Обновляем бюджет через API Ozon
@@ -2824,6 +2907,11 @@ def sync_campaign_activity_with_sheets(spreadsheet_url: str = None, sa_json_path
                                 # Дополнительно обновляем статус активности в Sheets
                                 ad_plan_item.is_active_in_sheets = True
                                 ad_plan_item.save(update_fields=['is_active_in_sheets'])
+                                # Обновляем статус в колонке C для этой строки
+                                try:
+                                    ws.update(f'C{row_number}', [["Активна"]])
+                                except Exception as ws_err:
+                                    logger.warning(f"[⚠️] Не удалось обновить статус в C{row_number}: {ws_err}")
                                 
                                 campaigns_activated += 1
                                 logger.info(f"[✅] Кампания {campaign_id} активирована успешно")
@@ -2838,6 +2926,11 @@ def sync_campaign_activity_with_sheets(spreadsheet_url: str = None, sa_json_path
                                 # Дополнительно обновляем статус активности в Sheets
                                 ad_plan_item.is_active_in_sheets = False
                                 ad_plan_item.save(update_fields=['is_active_in_sheets'])
+                                # Обновляем статус в колонке C для этой строки
+                                try:
+                                    ws.update(f'C{row_number}', [["Неактивна"]])
+                                except Exception as ws_err:
+                                    logger.warning(f"[⚠️] Не удалось обновить статус в C{row_number}: {ws_err}")
                                 
                                 campaigns_deactivated += 1
                                 logger.info(f"[✅] Кампания {campaign_id} деактивирована успешно")
@@ -3210,6 +3303,20 @@ def submit_performance_report_requests(store_id: int | None = None):
 
     return {"created": created, "skipped": skipped, "errors": errors}
 #-------------------------------------
+
+
+#--------Перерасчёт: Срабатывает при нажатии кнопки Обновить РК---------------
+@shared_task(name="Перерасчёт бюджета РК за период (с учётом потраченного)")
+def reforecast_ad_budgets_for_period(spreadsheet_url: str = None, sa_json_path: str = None, worksheet_name: str = "Main_ADV"):
+    try:
+
+        update_abc_sheet(spreadsheet_url=spreadsheet_url, sa_json_path=sa_json_path, consider_spent=1)
+        create_or_update_AD(spreadsheet_url=spreadsheet_url,sa_json_path=sa_json_path,worksheet_name=worksheet_name,start_row=13,block_size=100)
+
+    except Exception as e:
+        logger.error(f"[❌] reforecast_ad_budgets_for_period: {e}")
+        return {"error": str(e)}
+# -------------------------------------
 
 
 #--------Performance: получить готовые отчёты — по UUID вытягивает результаты и помечает READY/ERROR---------------

@@ -1,7 +1,7 @@
 from django.urls import path
 from .views import (SyncOzonProductView, SyncOzonCategoryTreeView, SyncOzonWarehouseStockView,SyncOzonSalesView,
                     SyncFbsStockView, ProductAnalytics_V2_View, ProductAnalyticsByItemView, TriggerUpdateABCSheetView,
-                    CreateOrUpdateAdPlanView)
+                    CreateOrUpdateAdPlanView, TriggerSyncCampaignActivityOverrideView)
 urlpatterns = [
     path('ozon/products/', SyncOzonProductView.as_view()),
     path('ozon/categories/sync/', SyncOzonCategoryTreeView.as_view()),
@@ -13,5 +13,6 @@ urlpatterns = [
     path("ozon/analytics/products/by-item/", ProductAnalyticsByItemView.as_view()),
     path("ozon/analytics/abc/update", TriggerUpdateABCSheetView.as_view()),
     path("ozon/createorupdateads/", CreateOrUpdateAdPlanView.as_view()),
+    path("ozon/campaigns/sync-override/", TriggerSyncCampaignActivityOverrideView.as_view()),
 
 ]

@@ -11,7 +11,7 @@ from django.db.models import Sum, F, Count, Q
 from datetime import datetime, timedelta
 from django.utils import timezone
 from collections import defaultdict
-from .tasks import update_abc_sheet, read_google_sheets_data
+from .tasks import update_abc_sheet, create_or_update_AD, sync_campaign_activity_with_sheets
 
 import logging
 # Наполянем модель товароми
@@ -885,6 +885,47 @@ class TriggerUpdateABCSheetView(APIView):
             })
 
 
+class TriggerSyncCampaignActivityOverrideView(APIView):
+    """Запускает синхронизацию активности кампаний с override_training=1 (игнор периода обучения)."""
+    def post(self, request):
+        spreadsheet_url = request.data.get("spreadsheet_url")
+        sa_json_path = request.data.get("sa_json_path")
+        worksheet_name = request.data.get("worksheet_name", "Main_ADV")
+        start_row = int(request.data.get("start_row", 13))
+        block_size = int(request.data.get("block_size", 100))
+        async_mode = bool(request.data.get("async", False))
+
+        kwargs = dict(
+            spreadsheet_url=spreadsheet_url,
+            sa_json_path=sa_json_path,
+            worksheet_name=worksheet_name,
+            start_row=start_row,
+            block_size=block_size,
+            override_training=1,
+        )
+
+        if async_mode:
+            res = sync_campaign_activity_with_sheets.delay(**kwargs)
+            return Response({
+                "status": "accepted",
+                "task_id": res.id,
+                "message": "Синхронизация активности запущена (override_training=1)"
+            })
+        # sync mode
+        try:
+            result = sync_campaign_activity_with_sheets(**kwargs)
+            return Response({
+                "status": "completed",
+                "result": result,
+                "message": "Синхронизация активности выполнена (override_training=1)"
+            })
+        except Exception as e:
+            return Response({
+                "status": "error",
+                "error": str(e)
+            }, status=500)
+
+
 
 
 
@@ -899,7 +940,7 @@ class CreateOrUpdateAdPlanView(APIView):
             logging.info(f"[🚀] Запуск синхронного чтения данных из Google Sheets")
             
             # Запускаем функцию синхронно (не асинхронно)
-            result = read_google_sheets_data()
+            result = create_or_update_AD()
             
             if isinstance(result, list) and len(result) > 0:
                 return Response({
