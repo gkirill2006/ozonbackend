@@ -11,7 +11,7 @@ from django.db.models import Sum, F, Count, Q
 from datetime import datetime, timedelta
 from django.utils import timezone
 from collections import defaultdict
-from .tasks import update_abc_sheet, create_or_update_AD, sync_campaign_activity_with_sheets
+from .tasks import update_abc_sheet, create_or_update_AD, sync_campaign_activity_with_sheets, toggle_store_ads_status
 
 import logging
 # Наполянем модель товароми
@@ -963,3 +963,31 @@ class CreateOrUpdateAdPlanView(APIView):
                 "status": "error",
                 "error": f"Ошибка при чтении данных: {str(e)}"
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class ToggleStoreAdsStatusView(APIView):
+    """Синхронно переключает статус рекламной системы для магазина и отражает его в S3 таблицы."""
+    def post(self, request):
+        store_name = request.data.get("store_name") or request.data.get("name")
+        spreadsheet_url = request.data.get("spreadsheet_url")
+        sa_json_path = request.data.get("sa_json_path")
+        worksheet_name = request.data.get("worksheet_name", "Main_ADV")
+
+        if not store_name:
+            return Response({"error": "store_name is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        store = (OzonStore.objects.filter(name__iexact=store_name).first() or
+                 OzonStore.objects.filter(client_id__iexact=store_name).first())
+        if not store:
+            return Response({"error": f"Store '{store_name}' not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            result = toggle_store_ads_status(
+                store_id=store.id,
+                spreadsheet_url=spreadsheet_url,
+                sa_json_path=sa_json_path,
+                worksheet_name=worksheet_name,
+            )
+            return Response({"status": "ok", "result": result}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

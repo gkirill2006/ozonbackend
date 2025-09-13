@@ -524,6 +524,20 @@ class ManualCampaign(models.Model):
         return f"{self.name} (ID: {self.ozon_campaign_id})"
 
 
+# Флаг управления рекламной системой по магазину (старт/стоп)
+class StoreAdControl(models.Model):
+    store = models.OneToOneField(OzonStore, on_delete=models.CASCADE, related_name='ad_control')
+    is_system_enabled = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Управление рекламной системой магазина"
+        verbose_name_plural = "Управление рекламной системой магазинов"
+
+    def __str__(self):
+        return f"{self.store} | {'Включен' if self.is_system_enabled else 'Выключен'}"
+
+
 # ХРАНЕНИЕ ОТЧЁТОВ PERFORMANCE API (статистика рекламных кампаний)
 class CampaignPerformanceReport(models.Model):
     """

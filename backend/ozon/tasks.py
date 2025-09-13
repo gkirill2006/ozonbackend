@@ -3319,6 +3319,62 @@ def reforecast_ad_budgets_for_period(spreadsheet_url: str = None, sa_json_path: 
 # -------------------------------------
 
 
+#--------Кнопка Старт/Стоп ---------------
+@shared_task(name="Кнопка Старт/Стоп")
+def toggle_store_ads_status(store_id: int, spreadsheet_url: str = None, sa_json_path: str = None, worksheet_name: str = "Main_ADV"):
+    """
+    Меняет флаг в модели StoreAdControl для указанного магазина на противоположный
+    и обновляет ячейку S3 в Google Sheets текущим значением ("Включен"/"Выключен").
+    Args:
+        store_id: ID магазина (OzonStore.id)
+        spreadsheet_url, sa_json_path, worksheet_name: параметры таблицы (опционально)
+
+    Returns:
+        dict: {"status": "on"|"off"}
+    """
+    try:
+        # Получаем магазин
+        store = OzonStore.objects.filter(id=store_id).first()
+        if not store:
+            return {"error": f"store id={store_id} not found"}
+
+        # Тоглим флаг в модели
+        from .models import StoreAdControl
+        ctrl, _ = StoreAdControl.objects.get_or_create(store=store)
+        ctrl.is_system_enabled = not bool(ctrl.is_system_enabled)
+        ctrl.save(update_fields=["is_system_enabled", "updated_at"])
+        desired = ctrl.is_system_enabled
+
+        # Обновляем S3
+        import os
+        spreadsheet_url = spreadsheet_url or os.getenv(
+            "ABC_SPREADSHEET_URL",
+            "https://docs.google.com/spreadsheets/d/1-_XS6aRZbpeEPFDyxH3OV0IMbl_GUUEysl6ZJXoLmQQ",
+        )
+        sa_json_path = sa_json_path or os.getenv(
+            "GOOGLE_SA_JSON_PATH",
+            "/workspace/ozon-469708-c5f1eca77c02.json",
+        )
+        scopes = [
+            'https://www.googleapis.com/auth/spreadsheets',
+            'https://www.googleapis.com/auth/drive'
+        ]
+        creds = Credentials.from_service_account_file(sa_json_path, scopes=scopes)
+        gc = gspread.authorize(creds)
+        sh = gc.open_by_url(spreadsheet_url)
+        ws = sh.worksheet(worksheet_name)
+
+        try:
+            ws.update('S3', [["Включен" if desired else "Выключен"]])
+        except Exception as ws_err:
+            logger.warning(f"[⚠️] Не удалось записать статус в S3: {ws_err}")
+
+        return {"status": "on" if desired else "off"}
+    except Exception as e:
+        logger.error(f"[❌] toggle_store_ads_status: {e}")
+        return {"error": str(e)}
+#-------------------------------------
+
 #--------Performance: получить готовые отчёты — по UUID вытягивает результаты и помечает READY/ERROR---------------
 @shared_task(name="Performance: получить готовые отчёты")
 def fetch_performance_reports(max_reports: int = 50):
