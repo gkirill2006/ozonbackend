@@ -3065,9 +3065,6 @@ def sync_campaign_activity_with_sheets(
                                 # Обновляем данные кампании из ответа API
                                 _update_campaign_from_ozon_response(ad_plan_item, activate_response)
                                 
-                                # Дополнительно обновляем статус активности в Sheets
-                                ad_plan_item.is_active_in_sheets = True
-                                ad_plan_item.save(update_fields=['is_active_in_sheets'])
                                 # Обновляем статус в колонке C для этой строки
                                 try:
                                     ws.update(f'C{row_number}', [["Активна"]])
@@ -3084,9 +3081,6 @@ def sync_campaign_activity_with_sheets(
                                 # Обновляем данные кампании из ответа API
                                 _update_campaign_from_ozon_response(ad_plan_item, deactivate_response)
                                 
-                                # Дополнительно обновляем статус активности в Sheets
-                                ad_plan_item.is_active_in_sheets = False
-                                ad_plan_item.save(update_fields=['is_active_in_sheets'])
                                 # Обновляем статус в колонке C для этой строки
                                 try:
                                     ws.update(f'C{row_number}', [["Неактивна"]])
@@ -3102,11 +3096,6 @@ def sync_campaign_activity_with_sheets(
                             logger.error(f"[❌] Ошибка синхронизации кампании {campaign_id}: {sync_error}")
                             campaigns_skipped += 1
                     else:
-                        # Обновляем только статус в Google Sheets, если он изменился
-                        if current_sheets_active != should_be_active:
-                            ad_plan_item.is_active_in_sheets = should_be_active
-                            ad_plan_item.save(update_fields=['is_active_in_sheets'])
-                        
                         logger.debug(f"[✅] Кампания {campaign_id}: синхронизация не требуется")
                 
                 current_row += block_size
@@ -3364,33 +3353,153 @@ def toggle_store_ads_status(
                     .values_list('ozon_campaign_id', flat=True)
                 )
 
-                # Деактивируем авто-кампании через Performance API
+                # Деактивируем авто-кампании через Performance API (с ретраями)
                 deactivated = 0
+                failed_ids = []
                 for cid in campaign_ids:
-                    try:
-                        deactivate_campaign(access_token=access_token, campaign_id=str(cid))
-                        deactivated += 1
-                    except Exception as api_err:
-                        logger.warning(f"[⚠️] Не удалось деактивировать кампанию {cid}: {api_err}")
+                    ok = False
+                    for attempt in range(3):
+                        try:
+                            deactivate_campaign(access_token=access_token, campaign_id=str(cid))
+                            # Обновляем модель: помечаем как остановлена и выключена в Sheets
+                            from .models import AdPlanItem as _Ad
+                            _Ad.objects.filter(store=store, ozon_campaign_id=str(cid)).update(
+                                state=_Ad.CAMPAIGN_STATE_INACTIVE,
+                            )
+                            deactivated += 1
+                            ok = True
+                            break
+                        except Exception as api_err:
+                            logger.warning(f"[⚠️] Деактивация {cid} (попытка {attempt+1}/3) не удалась: {api_err}")
+                            time.sleep(2)
+                    if not ok:
+                        failed_ids.append(str(cid))
 
-                # В БД: помечаем, что в листе они неактивны (состояние сохраняем без изменения листа)
-                AdPlanItem.objects.filter(store=store).update(is_active_in_sheets=False)
-                logger.info(f"[🔴] Система выключена для {store}. Деактивировано авто-кампаний: {deactivated}. is_active_in_sheets сброшен в False")
+                if failed_ids:
+                    logger.error(f"[🔴] Выключение {store}: деактивировано={deactivated}, ошибок={len(failed_ids)}: {failed_ids}")
+                else:
+                    logger.info(f"[🔴] Система выключена для {store}. Деактивировано авто-кампаний: {deactivated}.")
             except Exception as off_err:
                 logger.error(f"[❌] Ошибка при массовой деактивации кампаний для {store}: {off_err}")
         elif desired and previous != desired:
-            # Если включили систему — запускаем процесс создания/обновления РК из таблицы
+            # Если включили систему — активируем все авто-кампании магазина (ручные не трогаем)
             try:
-                logger.info(f"[▶️] Система включена для {store}. Запускаем create_or_update_AD")
-                create_or_update_AD(
-                    spreadsheet_url=spreadsheet_url,
-                    sa_json_path=sa_json_path,
-                    worksheet_name=worksheet_name,
-                    start_row=13,
-                    block_size=100,
+                from .utils import get_store_performance_token
+                token_info = get_store_performance_token(store)
+                access_token = token_info.get("access_token")
+                if not access_token:
+                    raise Exception("Не удалось получить access_token для магазина")
+
+                from .models import AdPlanItem
+                campaign_ids = list(
+                    AdPlanItem.objects.filter(store=store)
+                    .exclude(ozon_campaign_id__isnull=True)
+                    .exclude(ozon_campaign_id='')
+                    .values_list('ozon_campaign_id', flat=True)
                 )
+                activated = 0
+                failed_ids = []
+                for cid in campaign_ids:
+                    ok = False
+                    for attempt in range(3):
+                        try:
+                            activate_campaign(access_token=access_token, campaign_id=str(cid))
+                            # Обновим состояние в модели как ACTIVE
+                            AdPlanItem.objects.filter(store=store, ozon_campaign_id=str(cid)).update(
+                                state=AdPlanItem.CAMPAIGN_STATE_ACTIVE,
+                            )
+                            activated += 1
+                            ok = True
+                            break
+                        except Exception as api_err:
+                            logger.warning(f"[⚠️] Активация {cid} (попытка {attempt+1}/3) не удалась: {api_err}")
+                            time.sleep(2)
+                    if not ok:
+                        failed_ids.append(str(cid))
+                if failed_ids:
+                    logger.error(f"[🟢] Включение {store}: активировано={activated}, ошибок={len(failed_ids)}: {failed_ids}")
+                else:
+                    logger.info(f"[🟢] Система включена для {store}. Активировано авто-кампаний: {activated}.")
             except Exception as on_err:
-                logger.error(f"[❌] Ошибка при старте create_or_update_AD для {store}: {on_err}")
+                logger.error(f"[❌] Ошибка массовой активации кампаний для {store}: {on_err}")
+
+        # После переключения состояния — проставляем актуальные статусы кампаний в колонку C
+        try:
+            from .models import AdPlanItem as _Ad, ManualCampaign as _MC
+
+            def _translate_auto(status: str) -> str:
+                m = {
+                    'PREVIEW': 'Предпросмотр',
+                    'ACTIVATED': 'Активирована',
+                    'CAMPAIGN_STATE_RUNNING': 'Запущена',
+                    'CAMPAIGN_STATE_ACTIVE': 'Активна',
+                    'CAMPAIGN_STATE_INACTIVE': 'Неактивна',
+                    'CAMPAIGN_STATE_PLANNED': 'Запланирована',
+                    'CAMPAIGN_STATE_STOPPED': 'Остановлена',
+                    'CAMPAIGN_STATE_ARCHIVED': 'Архивная',
+                    'CAMPAIGN_STATE_FINISHED': 'Завершена',
+                    'CAMPAIGN_STATE_PAUSED': 'Приостановлена',
+                    'CAMPAIGN_STATE_ENDED': 'Завершена',
+                    'CAMPAIGN_STATE_MODERATION_DRAFT': 'Черновик модерации',
+                    'CAMPAIGN_STATE_MODERATION_IN_PROGRESS': 'На модерации',
+                    'CAMPAIGN_STATE_MODERATION_FAILED': 'Не прошла модерацию',
+                }
+                return m.get(status or '', 'Неизвестно')
+
+            def _translate_manual(status: str) -> str:
+                # те же метки применим и к ручным
+                return _translate_auto(status)
+
+            current_row = 13
+            block_size_local = 100
+            empty_rows = 0
+            logger.info(f"[📝] Обновляем статусы кампаний в колонке C начиная с строки {current_row}")
+            while empty_rows < 5:
+                end_row = current_row + block_size_local - 1
+                rng = f"A{current_row}:C{end_row}"
+                try:
+                    block = ws.get(rng)
+                except Exception as read_err:
+                    logger.warning(f"[⚠️] Не удалось прочитать диапазон {rng}: {read_err}")
+                    break
+                if not block:
+                    empty_rows += block_size_local
+                    current_row += block_size_local
+                    continue
+                statuses_to_write = []
+                block_had_data = False
+                for i, r in enumerate(block):
+                    # нормализуем длину
+                    row_vals = r + [''] * (3 - len(r))
+                    cid = str(row_vals[0]).strip() if row_vals[0] is not None else ''
+                    existing_c = str(row_vals[2]).strip() if row_vals[2] is not None else ''
+                    if cid:
+                        block_had_data = True
+                        # пробуем найти среди авто и ручных
+                        ad = _Ad.objects.filter(store=store, ozon_campaign_id=cid).first()
+                        if ad:
+                            statuses_to_write.append([_translate_auto(ad.state)])
+                            continue
+                        mc = _MC.objects.filter(store=store, ozon_campaign_id=cid).first()
+                        if mc:
+                            statuses_to_write.append([_translate_manual(mc.state)])
+                            continue
+                    # если нет campaign_id или не нашли в БД — оставляем как есть
+                    statuses_to_write.append([existing_c])
+                # Пишем обратно ровно столько строк, сколько прочитали
+                try:
+                    ws.update(f"C{current_row}:C{current_row + len(statuses_to_write) - 1}", statuses_to_write)
+                except Exception as write_err:
+                    logger.warning(f"[⚠️] Не удалось обновить статусы в диапазоне C{current_row}: {write_err}")
+                # обновляем курсор
+                current_row += len(block)
+                # проверяем пустые хвосты блока
+                if block_had_data:
+                    empty_rows = 0
+                else:
+                    empty_rows += len(block)
+        except Exception as upd_err:
+            logger.warning(f"[⚠️] Не удалось обновить статусы кампаний (колонка C): {upd_err}")
 
         return {
             "previous": "on" if previous else "off",
@@ -4342,7 +4451,7 @@ def monitor_auto_campaigns_weekly(reenable_hour: int = 9):
                 try:
                     from .utils import deactivate_campaign_for_store
                     deactivate_campaign_for_store(ad.store, ad.ozon_campaign_id)
-                    AdPlanItem.objects.filter(id=ad.id).update(state=AdPlanItem.CAMPAIGN_STATE_STOPPED)
+                    AdPlanItem.objects.filter(id=ad.id).update(state=AdPlanItem.CAMPAIGN_STATE_INACTIVE)
                     stopped += 1
                     logger.info(f"[🛑] Превышен лимит. Остановили кампанию {ad.ozon_campaign_id} до завтра")
                 except Exception as e:

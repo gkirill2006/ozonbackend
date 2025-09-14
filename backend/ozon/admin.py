@@ -4,7 +4,8 @@ from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
 from datetime import timedelta, date as dt_date
 from .models import (Product, WarehouseStock, Sale, FbsStock, Category, DeliveryCluster, DeliveryClusterItemAnalytics,
-                     DeliveryAnalyticsSummary, ProductDailyAnalytics, AdPlanItem, ManualCampaign, CampaignPerformanceReport, CampaignPerformanceReportEntry)
+                     DeliveryAnalyticsSummary, ProductDailyAnalytics, AdPlanItem, ManualCampaign, CampaignPerformanceReport, CampaignPerformanceReportEntry,
+                     StoreAdControl)
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
@@ -429,3 +430,23 @@ class CampaignPerformanceReportEntryAdmin(admin.ModelAdmin):
     report_date_to.short_description = 'Date To'
     report_date_to.admin_order_field = 'report__date_to'
     report_date_to.admin_order_field = 'report__date_to'
+
+
+@admin.register(StoreAdControl)
+class StoreAdControlAdmin(admin.ModelAdmin):
+    list_display = ('store', 'is_system_enabled', 'updated_at')
+    list_filter = ('is_system_enabled',)
+    search_fields = ('store__name', 'store__client_id')
+    readonly_fields = ('updated_at',)
+
+    actions = ('enable_selected', 'disable_selected')
+
+    @admin.action(description='Включить систему для выбранных магазинов')
+    def enable_selected(self, request, queryset):
+        updated = queryset.update(is_system_enabled=True)
+        self.message_user(request, f'Включено: {updated}')
+
+    @admin.action(description='Выключить систему для выбранных магазинов')
+    def disable_selected(self, request, queryset):
+        updated = queryset.update(is_system_enabled=False)
+        self.message_user(request, f'Выключено: {updated}')

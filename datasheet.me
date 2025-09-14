@@ -1,0 +1,132 @@
+Алгоритм работы системы и функции в ней
+
+1. Перед самым первым запуском компании нажимаем кнопку “Обновить таблицу”. Далее эту кнопку убираем вообще. Дальше все будет работать на автомате.
+2. Нажимаем кнопку Обновить РК. Это активирует рекламу в озоне
+3. Каждый час система чекает стольбец B нужно ли включать или выключать компании и столбец ручного бюджета. Если ручной бюджет установлен, то вне зависимости от обучения недельный бюджет обновляется.
+4. Каждое первое число происходит обновление всех компаний. Какието останавливаются, какието добавляются. 
+5. Каждый понедельник происходит пересчет бюджетов если в “Учитывать бюджет ручных РК при создании “ стоит 1.
+6. Кнопка обновить РК. Создает новый ABC. Учитывает уже потраченный бюджет. Оставшийся бюджет распределяет заново. 
+7. Кнопка пересчитать бюджет принудительно - уже не понимаю/не помню зачем.
+
+8. Каждый день собираем статистику по затратам, продажам и т.д. Заполняем столбцы с M по S
+Проект: Ozon Ads — карта функций и сценарии
+
+Содержание
+- Обзор
+- Основные таски (backend/ozon/tasks.py)
+- Утилиты Performance/Seller API (backend/ozon/utils.py)
+- Веб‑эндпоинты (backend/ozon/views.py → backend/ozon/urls.py)
+- Модели и флаги (backend/ozon/models.py)
+- Колонки Google Sheets (лист Main_ADV)
+- Частые сценарии и кнопки
+- Заметки по миграциям и токенам
+
+Обзор
+- Источник правды — Google Sheet «Main_ADV». Из него читаются параметры (V13..V27), собирается ABC-лист и создаются/синхронизируются кампании.
+- Реклама разделена на ручные (ManualCampaign) и автоматические (AdPlanItem). Авто‑кампании управляются через Ozon Performance API.
+- Performance отчёты храним в CampaignPerformanceReport (+CampaignPerformanceReportEntry) и используем для KPI/учёта потраченного.
+
+Основные таски (backend/ozon/tasks.py)
+- Каталоги/товары/остатки/продажи
+  - sync_all_ozon_categories(), fetch_and_save_category_tree()
+  - sync_all_products(), _sync_products_for_store()
+  - sync_all_warehouse_stocks(), sync_warehouse_stock_for_store()
+  - sync_all_fbs_stocks(), _sync_fbs_stock_for_store()
+  - fetch_*: seller API обёртки (в utils есть низкоуровневые версии)
+- Ежедневная аналитика по товарам
+  - sync_product_daily_analytics(), _iter_analytics_pages(), _save_analytics_batch()
+- ABC и бюджет
+  - update_abc_sheet(spreadsheet_url=None, sa_json_path=None, consider_spent=0)
+    - Строит ABC, распределяет бюджеты. Если consider_spent=1 —
+      учитывает moneySpent с 1‑го числа текущего месяца и распределяет ОСТАТОК на оставшиеся дни месяца.
+- Ручные кампании
+  - sync_manual_campaigns(store_id=None)
+- Создание/обновление из Sheets
+  - create_or_update_AD(spreadsheet_url=None, ..., start_row=13, block_size=100)
+    - Читает A:L и:
+      - Пустая A → создаёт авто РК (если K>0, берётся как недельный бюджет; иначе J)
+      - Заполненная A → обновляет бюджет/активность существующих (учитывая train_days)
+      - Останавливает авто РК, которых нет в листе
+- Активность из Sheets
+  - sync_campaign_activity_with_sheets(..., override_training=0)
+    - Сверяет B (вкл/выкл), активирует/деактивирует РК в Ozon, обновляет колонку C статусом.
+    - Если override_training=1, игнорирует train_days при обновлении недельного бюджета (колонка K)
+- Мониторинг дневного лимита
+  - monitor_auto_campaigns_weekly(reenable_hour=9), reactivate_campaign_later()
+- Performance отчёты
+  - submit_performance_report_requests(store_id=None) — запрос за «вчера», batched
+  - fetch_performance_reports(max_reports=50) — забирает PENDING UUID → READY/ERROR, поддерживает мультиформат
+  - submit_daily_reports_for_campaign(...), submit_auto_reports_for_day(...), submit_reports_for_campaigns(...)
+  - submit_auto_reports_for_yesterday()/today()
+- KPI и запись в таблицу
+  - update_auto_campaign_kpis_in_sheets(...)
+    - Пишет M..S: adv_sales_amount/units/spend/drr, total_sales_amount/units, tacos_percent
+- Кнопка «Обновить РК»
+  - reforecast_ad_budgets_for_period(...)
+    - Минимальная обёртка: update_abc_sheet(consider_spent=1) → create_or_update_AD(...)
+- Старт/стоп системы
+  - toggle_store_ads_status(store_id, spreadsheet_url=None, sa_json_path=None, worksheet_name="Main_ADV")
+    - Тогглит StoreAdControl.is_system_enabled и записывает S3 «Включен/Выключен»
+
+Утилиты Performance/Seller API (backend/ozon/utils.py)
+- Токен: request_performance_token(), get_store_performance_token(store)
+- Performance кампании:
+  - create_cpc_product_campaign(), create_cpc_product_campaign_for_store()
+  - update_campaign_budget(), update_campaign_budget_for_store()
+  - activate_campaign(), activate_campaign_for_store()
+  - deactivate_campaign(), deactivate_campaign_for_store()
+- Seller API: fetch_* для продуктов/остатков/продаж
+
+Веб‑эндпоинты (backend/ozon/views.py → backend/ozon/urls.py)
+- POST /ozon/products/ — SyncOzonProductView
+- POST /ozon/categories/sync/ — SyncOzonCategoryTreeView
+- POST /ozon/warehouse/sync/ — SyncOzonWarehouseStockView
+- POST /ozon/sales/sync/ — SyncOzonSalesView
+- POST /ozon/analytics/ — ProductAnalytics_V2_View
+- POST /ozon/analytics/products/by-item/ — ProductAnalyticsByItemView
+- POST /ozon/analytics/abc/update — TriggerUpdateABCSheetView (синхронно/асинхронно)
+- GET  /ozon/createorupdateads/ — CreateOrUpdateAdPlanView (синхронно читает лист и применяет)
+- POST /ozon/campaigns/sync-override/ — TriggerSyncCampaignActivityOverrideView (override_training=1)
+- POST /ozon/ads/toggle/ — ToggleStoreAdsStatusView (переключение статуса системы по магазину + запись в S3)
+
+Модели и флаги (backend/ozon/models.py)
+- Товары/остатки/продажи: Product, Category, ProductType, WarehouseStock, Sale, FbsStock
+- Доставка/аналитика: DeliveryCluster, DeliveryClusterItemAnalytics, DeliveryAnalyticsSummary
+- Ежедневная аналитика: ProductDailyAnalytics
+- Реклама:
+  - AdPlanItem (авто): week_budget/day_budget/manual_budget/train_days/state/…
+  - ManualCampaign (ручные)
+  - CampaignPerformanceReport, CampaignPerformanceReportEntry (otчёты Performance)
+  - StoreAdControl (is_system_enabled) — флаг старт/стоп по магазину
+
+Колонки Google Sheets (Main_ADV)
+- V13 — период (дней) для анализа ABC
+- V14 — процент/доля бюджета на рекламу от выручки
+- V17 — train_days
+- V23 — магазин (name/client_id)
+- ABC запись:
+  - A — ID кампании, B — вкл/выкл, C — статус, D — название, E — тип
+  - F — артикул, G — SKU, J — недельный бюджет, K — недельный бюджет РУЧНОЙ, L — дневной бюджет
+  - M..S — KPI и продажи (в update_auto_campaign_kpis_in_sheets)
+  - S3 — «Включен/Выключен» (статус системы)
+
+Частые сценарии и кнопки
+- Раз в месяц (автоматически): update_abc_sheet(consider_spent=0) → create_or_update_AD
+- Кнопка «Обновить РК» (ручной перерасчёт в середине месяца):
+  - reforecast_ad_budgets_for_period → update_abc_sheet(consider_spent=1) → create_or_update_AD
+  - Остаток месячного бюджета распределяется на оставшиеся дни месяца
+- Кнопка «Старт/стоп» (S3):
+  - ToggleStoreAdsStatusView → toggle_store_ads_status: меняет StoreAdControl.is_system_enabled и S3
+  - При Выключен можно дополнительно вызывать массовую деактивацию активных кампаний; при Включен — активировать кампании из листа
+- Синхронизация активности раз в час:
+  - sync_campaign_activity_with_sheets (override_training=0, по умолчанию)
+  - Обновляет статусы/бюджет (K) и колонку C
+- KPI + заполнение M..S:
+  - update_auto_campaign_kpis_in_sheets
+
+Заметки по миграциям и токенам
+- После добавления моделей:
+  - StoreAdControl, CampaignPerformanceReport/Entry — запустить миграции
+    - python manage.py makemigrations ozon && python manage.py migrate
+- Performance API требует client_id/secret в OzonStore (performance_client_id/secret). Токен берётся get_store_performance_token(store).
+- Для reforecast/override рекомендуется иметь свежие Performance отчёты (submit_* + fetch_*), иначе moneySpent может быть 0.

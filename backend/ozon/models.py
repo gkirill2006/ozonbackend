@@ -531,8 +531,8 @@ class StoreAdControl(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        verbose_name = "Управление рекламной системой магазина"
-        verbose_name_plural = "Управление рекламной системой магазинов"
+        verbose_name = "Вкл/Выкл"
+        verbose_name_plural = "Вкл/Выкл"
 
     def __str__(self):
         return f"{self.store} | {'Включен' if self.is_system_enabled else 'Выключен'}"
