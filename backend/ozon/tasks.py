@@ -2321,7 +2321,7 @@ def sync_manual_campaigns(store_id: int = None):
                             })
                         
                         # Создаем или обновляем кампанию
-                        logger.info(f"[🔍] Создание/обновление кампании {campaign_id} с данными: {campaign_defaults}")
+                        # logger.info(f"[🔍] Создание/обновление кампании {campaign_id} с данными: {campaign_defaults}")
                         
                         campaign, created = ManualCampaign.objects.update_or_create(
                             ozon_campaign_id=str(campaign_id),
@@ -2330,19 +2330,12 @@ def sync_manual_campaigns(store_id: int = None):
                         
                         if created:
                             total_created += 1
-                            logger.info(f"[✅] Создана новая ручная кампания: {campaign.name} (ID: {campaign_id})")
+                            # logger.info(f"[✅] Создана новая ручная кампания: {campaign.name} (ID: {campaign_id})")
                         else:
                             total_updated += 1
-                            logger.info(f"[🔄] Обновлена ручная кампания: {campaign.name} (ID: {campaign_id})")
+                            # logger.info(f"[🔄] Обновлена ручная кампания: {campaign.name} (ID: {campaign_id})")
                         
-                        # Сохраняем информацию о множественных SKU в кампании
-                        # Теперь все SKU хранятся в одном месте - в ManualCampaign
-                        # Это упрощает управление и не требует создания множественных записей
-                        if sku_list:
-                            logger.info(f"[ℹ️] Кампания {campaign_id} содержит {len(sku_list)} SKU: {sku_list}")
-                        else:
-                            logger.warning(f"[⚠️] В кампании {campaign_id} не найдено SKU")
-                            
+
                         total_synced += 1
                         
                     except Exception as e:
@@ -2351,7 +2344,7 @@ def sync_manual_campaigns(store_id: int = None):
                         logger.error(f"[🔍] Данные кампании: {campaign_data}")
                         continue
                         
-                logger.info(f"[✅] Синхронизация завершена для магазина: {store}")
+                # logger.info(f"[✅] Синхронизация завершена для магазина: {store}")
                 
             except Exception as e:
                 total_errors += 1
@@ -3204,7 +3197,7 @@ def _rfc3339(dt: datetime) -> str:
 
 #--------Performance: запросить отчёты за вчера — создаёт PENDING записи с UUID для периода 'вчера'---------------
 @shared_task(name="Performance: запросить отчёты за вчера")
-def submit_performance_report_requests(store_id: int | None = None):
+def submit_performance_report_requests(store_id: int | None = None, retry_interval_sec: int = 10):
     """
     Создаёт запросы отчётов Performance API (/statistics/json) за вчерашний день для всех кампаний.
     Сохраняет UUID отчёта в CampaignPerformanceReport со статусом PENDING.
@@ -3250,58 +3243,86 @@ def submit_performance_report_requests(store_id: int | None = None):
         }
         url = "https://api-performance.ozon.ru:443/api/client/statistics/json"
 
-        # Ozon API поддерживает мульти-кампании за раз; пойдём батчами по 50
+        # Ozon API ограничивает запрос максимум 10 кампаниями за раз
         campaign_ids = list(ad_items.values_list('ozon_campaign_id', flat=True))
-        batch_size = 50
+        batch_size = 10
         for i in range(0, len(campaign_ids), batch_size):
-            batch = [str(c) for c in campaign_ids[i:i+batch_size]]
+            batch = [str(c) for c in campaign_ids[i:i + batch_size]]
             payload = {
                 "campaigns": batch,
                 "from": date_from,
                 "to": date_to,
                 "groupBy": "NO_GROUP_BY",
             }
-            try:
-                resp = requests.post(url, headers=headers, json=payload, timeout=30)
-                if resp.status_code not in (200, 201, 202):
-                    logger.error(f"[❌] statistics/json {store}: {resp.status_code} {resp.text}")
-                    errors += 1
-                    continue
-                data = resp.json() if resp.text else {}
-                uuid_val = data.get('UUID') or data.get('uuid')
-                if not uuid_val:
-                    logger.warning(f"[⚠️] Нет UUID в ответе: {data}")
-                    skipped += 1
+            refresh_attempts = 0
+            while True:
+                try:
+                    logger.info(f"[➡️ POST] /statistics/json {store} batch={len(batch)} {date_from}..{date_to}")
+                    resp = requests.post(url, headers=headers, json=payload, timeout=30)
+                except Exception as e:
+                    logger.error(f"[❌] Ошибка сети/запроса: {e}. Retry {retry_interval_sec}s…")
+                    time.sleep(retry_interval_sec)
                     continue
 
-                # Сохраняем одну запись на UUID и период; кампаний в payload может быть несколько —
-                # API вернёт один общий UUID, отчёт вернётся сгруппированный по campaignId в JSON.
-                # Привяжем к первой кампании для уникальности, а в rows будет детализация по всем.
-                first_campaign = batch[0]
-                obj, created_flag = CampaignPerformanceReport.objects.get_or_create(
-                    store=store,
-                    ozon_campaign_id=str(first_campaign),
-                    date_from=start_local,
-                    date_to=end_local,
-                    defaults={
-                        'report_uuid': uuid_val,
-                        'status': CampaignPerformanceReport.STATUS_PENDING,
-                        'request_payload': payload,
-                    }
-                )
-                if not created_flag:
-                    # Если уже есть — обновим UUID/статус/пейлоад
-                    obj.report_uuid = uuid_val
-                    obj.status = CampaignPerformanceReport.STATUS_PENDING
-                    obj.request_payload = payload
-                    obj.save(update_fields=['report_uuid', 'status', 'request_payload'])
-                    skipped += 1
-                else:
-                    created += 1
-                logger.info(f"[📨] Запрошен отчёт UUID={uuid_val} для {store} кампаний={len(batch)} {date_from}..{date_to}")
-            except Exception as e:
-                logger.error(f"[❌] Ошибка запроса отчёта для {store}: {e}")
-                errors += 1
+                if resp.status_code in (200, 201, 202):
+                    data = resp.json() if resp.text else {}
+                    uuid_val = data.get('UUID') or data.get('uuid')
+                    if not uuid_val:
+                        logger.warning(f"[⚠️] Нет UUID в ответе: {data}. Retry {retry_interval_sec}s…")
+                        time.sleep(retry_interval_sec)
+                        continue
+                    # Сохраняем одну запись на UUID и период; кампаний в payload может быть несколько — общий UUID
+                    first_campaign = batch[0]
+                    obj, created_flag = CampaignPerformanceReport.objects.get_or_create(
+                        store=store,
+                        ozon_campaign_id=str(first_campaign),
+                        date_from=start_local,
+                        date_to=end_local,
+                        defaults={
+                            'report_uuid': uuid_val,
+                            'status': CampaignPerformanceReport.STATUS_PENDING,
+                            'request_payload': payload,
+                        }
+                    )
+                    if not created_flag:
+                        obj.report_uuid = uuid_val
+                        obj.status = CampaignPerformanceReport.STATUS_PENDING
+                        obj.request_payload = payload
+                        obj.save(update_fields=['report_uuid', 'status', 'request_payload'])
+                        skipped += 1
+                    else:
+                        created += 1
+                    logger.info(f"[📨] Запрошен отчёт UUID={uuid_val} для {store} кампаний={len(batch)} {date_from}..{date_to}")
+                    break
+
+                if resp.status_code == 403:
+                    try:
+                        refresh_attempts += 1
+                        if refresh_attempts > 2:
+                            logger.error(f"[🔐] 403 для {store}, превышен лимит обновлений токена. Пропуск батча.")
+                            errors += 1
+                            break
+                        token_info = get_store_performance_token(store)
+                        access_token = token_info.get('access_token')
+                        headers["Authorization"] = f"Bearer {access_token}"
+                        logger.info(f"[🔐] Токен обновлён, повторяем через {retry_interval_sec}s…")
+                        time.sleep(retry_interval_sec)
+                        continue
+                    except Exception as t_err:
+                        logger.error(f"[❌] Не удалось обновить токен для {store}: {t_err}")
+                        errors += 1
+                        break
+
+                if resp.status_code == 429:
+                    # Лимит активных запросов — ждём, затем повторяем тот же батч
+                    logger.error(f"[❌] statistics/json {store}: 429 {resp.text}. Retry {retry_interval_sec}s…")
+                    time.sleep(retry_interval_sec)
+                    continue
+
+                # Прочие ошибки — лог и повтор
+                logger.error(f"[❌] statistics/json {store}: {resp.status_code} {resp.text}. Retry {retry_interval_sec}s…")
+                time.sleep(retry_interval_sec)
+                continue
 
     return {"created": created, "skipped": skipped, "errors": errors}
 #-------------------------------------
@@ -3659,6 +3680,18 @@ def submit_daily_reports_for_campaign(
                     time.sleep(poll_interval_sec)
                     continue
 
+            # Обработка 403 — обновляем токен и повторяем
+            if resp.status_code == 403:
+                try:
+                    token_info = get_store_performance_token(store)
+                    access_token = token_info.get('access_token')
+                    headers["Authorization"] = f"Bearer {access_token}"
+                    logger.info(f"[🔐] 403 для {store} {day_str}. Обновили токен, повторяем после {poll_interval_sec}s…")
+                except Exception as t_err:
+                    logger.error(f"[🔐] Не удалось обновить токен для {store}: {t_err}")
+                time.sleep(poll_interval_sec)
+                continue
+
             # Обработка лимита 429 — ждём и повторяем тот же день
             if resp.status_code == 429:
                 logger.info(f"[⏳] Лимит активных отчётов (429) для {day_str}. Ждём {poll_interval_sec}s и пробуем снова…")
@@ -3704,6 +3737,17 @@ def fetch_performance_reports(max_reports: int = 50):
             }
             url = f"https://api-performance.ozon.ru:443/api/client/statistics/report?UUID={obj.report_uuid}"
             resp = requests.get(url, headers=headers, timeout=30)
+
+            if resp.status_code in (401, 403):
+                # Обновим токен и повторим один раз
+                try:
+                    token_info = get_store_performance_token(store)
+                    access_token = token_info.get('access_token')
+                    headers["Authorization"] = f"Bearer {access_token}"
+                    time.sleep(1)
+                    resp = requests.get(url, headers=headers, timeout=30)
+                except Exception as t_err:
+                    logger.error(f"[🔐] Не удалось обновить токен для отчёта {obj.report_uuid}: {t_err}")
 
             if resp.status_code == 202:
                 # Ещё не готово
@@ -3774,7 +3818,7 @@ def fetch_performance_reports(max_reports: int = 50):
 
 #--------Performance: прод — запросить отчёт по всем авто-кампаниям на указанную дату---------------
 @shared_task(name="Performance: прод — запросить дневной отчёт по всем авто-кампаниям")
-def submit_auto_reports_for_day(date_str: str, store_id: int | None = None, batch_size: int = 50, retry_interval_sec: int = 10):
+def submit_auto_reports_for_day(date_str: str, store_id: int | None = None, batch_size: int = 10, retry_interval_sec: int = 10):
     """
     Формирует отчёт за один день по всем автоматическим кампаниям (AdPlanItem) по магазинам, с ретраями 429.
     """
@@ -3847,6 +3891,7 @@ def submit_auto_reports_for_day(date_str: str, store_id: int | None = None, batc
             }
 
             # Ретраим текущий батч, пока не получим UUID
+            refresh_attempts = 0
             while True:
                 try:
                     logger.info(f"[➡️ POST] /statistics/json {store} batch={len(batch)} for {date_str}")
@@ -3886,6 +3931,26 @@ def submit_auto_reports_for_day(date_str: str, store_id: int | None = None, batc
                         continue
                     break  # идём к следующему батчу
 
+                if resp.status_code == 403:
+                    # Токен мог протухнуть — обновим и повторим
+                    try:
+                        refresh_attempts += 1
+                        if refresh_attempts > 2:
+                            logger.error(f"[🔐] 403 для {store}, превышен лимит обновлений токена. Пропускаем батч.")
+                            errors += 1
+                            break
+                        from .utils import get_store_performance_token
+                        token_info = get_store_performance_token(store)
+                        access_token = token_info.get('access_token')
+                        headers["Authorization"] = f"Bearer {access_token}"
+                        logger.info(f"[🔐] Обновили токен для {store}, повторяем запрос…")
+                        time.sleep(retry_interval_sec)
+                        continue
+                    except Exception as t_err:
+                        logger.error(f"[❌] Не удалось обновить токен после 403: {t_err}")
+                        errors += 1
+                        break
+
                 if resp.status_code == 429:
                     logger.info(f"[⏳] 429 лимит активных отчётов для {store}. Ждём {retry_interval_sec}s и пробуем снова…")
                     time.sleep(retry_interval_sec)
@@ -3899,7 +3964,7 @@ def submit_auto_reports_for_day(date_str: str, store_id: int | None = None, batc
 #-------------------------------------
 #--------Performance: прод — обёртка на вчерашний день (все авто-кампании) запуск в 04:00 каждый день---------------
 @shared_task(name="Performance: — дневной отчёт за вчера (все авто-кампании) запуск в 04:00 каждый день")
-def submit_auto_reports_for_yesterday(store_id: int | None = None, batch_size: int = 50, retry_interval_sec: int = 10):    
+def submit_auto_reports_for_yesterday(store_id: int | None = None, batch_size: int = 10, retry_interval_sec: int = 10):    
     """
     Запрашивает отчёт за вчерашний день по всем автоматическим кампаниям (через submit_auto_reports_for_day).
     """
@@ -3908,7 +3973,7 @@ def submit_auto_reports_for_yesterday(store_id: int | None = None, batch_size: i
 #-------------------------------------
 #--------Performance: прод — обёртка на сегодня (все авто-кампании) запускаем раз в час---------------
 @shared_task(name="Performance: прод — дневной отчёт за сегодня (все авто-кампании) запускаем раз в час")
-def submit_auto_reports_for_today(store_id: int | None = None, batch_size: int = 50, retry_interval_sec: int = 10):
+def submit_auto_reports_for_today(store_id: int | None = None, batch_size: int = 10, retry_interval_sec: int = 10):
     """
     Запрашивает отчёт за текущий день по всем автоматическим кампаниям (через submit_auto_reports_for_day).
     """
@@ -4215,6 +4280,7 @@ def submit_reports_for_campaigns(campaign_ids: list[str], date_str: str, store_i
     created = 0
     errors = 0
 
+    refresh_attempts = 0
     while True:
         try:
             logger.info(f"[➡️ POST] /statistics/json {store} campaigns={len(batch)} for {date_str}")
@@ -4251,6 +4317,25 @@ def submit_reports_for_campaigns(campaign_ids: list[str], date_str: str, store_i
                 time.sleep(retry_interval_sec)
                 continue
             break
+
+        if resp.status_code == 403:
+            # Протухший токен — обновим и повторим
+            try:
+                refresh_attempts += 1
+                if refresh_attempts > 2:
+                    logger.error(f"[🔐] 403 для {store}, превышен лимит обновлений токена.")
+                    errors += 1
+                    break
+                token_info = get_store_performance_token(store)
+                access_token = token_info.get('access_token')
+                headers["Authorization"] = f"Bearer {access_token}"
+                logger.info(f"[🔐] Обновили токен для {store}, повторяем запрос…")
+                time.sleep(retry_interval_sec)
+                continue
+            except Exception as t_err:
+                logger.error(f"[❌] Не удалось обновить токен после 403: {t_err}")
+                errors += 1
+                break
 
         if resp.status_code == 429:
             logger.info(f"[⏳] 429 лимит активных отчётов. Ждём {retry_interval_sec}s и пробуем снова…")
@@ -4300,6 +4385,17 @@ def fetch_daily_reports_for_campaign(ozon_campaign_id: str, store_id: int | None
             }
             url = f"https://api-performance.ozon.ru:443/api/client/statistics/report?UUID={obj.report_uuid}"
             resp = requests.get(url, headers=headers, timeout=30)
+
+            if resp.status_code in (401, 403):
+                # Токен мог протухнуть — обновим и повторим один раз
+                try:
+                    token_info = get_store_performance_token(store)
+                    access_token = token_info.get('access_token')
+                    headers["Authorization"] = f"Bearer {access_token}"
+                    time.sleep(1)
+                    resp = requests.get(url, headers=headers, timeout=30)
+                except Exception as t_err:
+                    logger.error(f"[🔐] Не удалось обновить токен для GET отчёта {obj.report_uuid}: {t_err}")
 
             if resp.status_code == 202:
                 obj.save(update_fields=['last_checked_at'])
