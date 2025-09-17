@@ -370,18 +370,18 @@ class CampaignPerformanceReportAdmin(admin.ModelAdmin):
 @admin.register(CampaignPerformanceReportEntry)
 class CampaignPerformanceReportEntryAdmin(admin.ModelAdmin):
     list_display = (
-        'id', 'report_date_from', 'report_date_to', 'ozon_campaign_id', 'row_count',
+        'id', 'report_date', 'report_date_from', 'report_date_to', 'ozon_campaign_id', 'row_count',
         'views', 'clicks', 'money_spent', 'orders', 'orders_money', 'ctr', 'drr',
         'created_at', 'updated_at'
     )
     list_filter = (
-        ('report__date_from', DateFieldListFilter),
+        ('report_date', DateFieldListFilter),
         ('report__date_to', DateFieldListFilter),
         ('created_at', DateFieldListFilter),
         ('updated_at', DateFieldListFilter),
     )
     search_fields = ('ozon_campaign_id', 'report__report_uuid')
-    ordering = ('report__date_from', 'ozon_campaign_id', 'id')
+    ordering = ('report_date', 'ozon_campaign_id', 'id')
 
     def _get_num(self, obj, key):
         v = (obj.totals or {}).get(key)
@@ -420,10 +420,9 @@ class CampaignPerformanceReportEntryAdmin(admin.ModelAdmin):
 
     # Период отчёта из связанного Report
     def report_date_from(self, obj):
-        return obj.report.date_from.date() if obj.report and obj.report.date_from else ''
+        return obj.report_date
     report_date_from.short_description = 'Date From'
-    report_date_from.admin_order_field = 'report__date_from'
-    report_date_from.admin_order_field = 'report__date_from'
+    report_date_from.admin_order_field = 'report_date'
 
     def report_date_to(self, obj):
         return obj.report.date_to.date() if obj.report and obj.report.date_to else ''

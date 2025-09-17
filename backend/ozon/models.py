@@ -602,7 +602,9 @@ class CampaignPerformanceReportEntry(models.Model):
     """
 
     report = models.ForeignKey(CampaignPerformanceReport, on_delete=models.CASCADE, related_name='entries')
+    store = models.ForeignKey(OzonStore, on_delete=models.CASCADE, related_name='performance_report_entries')
     ozon_campaign_id = models.CharField(max_length=100)
+    report_date = models.DateField()
 
     totals = models.JSONField(null=True, blank=True)
     rows = models.JSONField(null=True, blank=True)
@@ -613,15 +615,19 @@ class CampaignPerformanceReportEntry(models.Model):
     class Meta:
         indexes = [
             models.Index(fields=['ozon_campaign_id']),
+            models.Index(fields=['store', 'ozon_campaign_id', 'report_date']),
         ]
         unique_together = (
             ('report', 'ozon_campaign_id'),
         )
+        constraints = [
+            models.UniqueConstraint(fields=['store', 'ozon_campaign_id', 'report_date'], name='ozon_report_entry_unique_store_campaign_date'),
+        ]
         verbose_name = 'Кампания в отчёте Performance'
         verbose_name_plural = 'Кампании в отчёте Performance'
 
     def __str__(self):
-        return f"Entry {self.ozon_campaign_id} of {self.report_id}"
+        return f"Entry {self.ozon_campaign_id} of {self.report_id} ({self.report_date:%Y-%m-%d})"
     @property
     def is_active(self):
         """Проверяет, активна ли кампания"""

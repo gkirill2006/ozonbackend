@@ -1451,9 +1451,9 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
                 since_date_consider = timezone.localdate().replace(day=1)
                 spent_sum = Decimal('0')
                 for _e in CampaignPerformanceReportEntry.objects.filter(
-                    report__store=store,
-                    report__date_from__date__gte=since_date_consider,
-                    report__date_from__date__lte=timezone.localdate(),
+                    store=store,
+                    report_date__gte=since_date_consider,
+                    report_date__lte=timezone.localdate(),
                 ).iterator():
                     _tot = _e.totals or {}
                     s = str(_tot.get('moneySpent') or '').replace('\u00A0','').replace('\u202F','').replace(' ','').replace(',', '.')
@@ -3195,138 +3195,6 @@ def _rfc3339(dt: datetime) -> str:
     return dt_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
-#--------Performance: запросить отчёты за вчера — создаёт PENDING записи с UUID для периода 'вчера'---------------
-@shared_task(name="Performance: запросить отчёты за вчера")
-def submit_performance_report_requests(store_id: int | None = None, retry_interval_sec: int = 10):
-    """
-    Создаёт запросы отчётов Performance API (/statistics/json) за вчерашний день для всех кампаний.
-    Сохраняет UUID отчёта в CampaignPerformanceReport со статусом PENDING.
-    """
-    from .models import CampaignPerformanceReport
-    from .utils import get_store_performance_token
-
-    # Диапазон: вчера 00:00:00 .. сегодня 00:00:00 (UTC)
-    now = timezone.now()
-    start_local = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    end_local = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    date_from = _rfc3339(start_local)
-    date_to = _rfc3339(end_local)
-
-    stores_qs = OzonStore.objects.all()
-    if store_id:
-        stores_qs = stores_qs.filter(id=store_id)
-    created = 0
-    skipped = 0
-    errors = 0
-
-    for store in stores_qs:
-        # Получаем все кампании с campaign_id
-        ad_items = AdPlanItem.objects.filter(store=store, ozon_campaign_id__isnull=False).exclude(ozon_campaign_id='')
-        if not ad_items.exists():
-            continue
-        try:
-            token_info = get_store_performance_token(store)
-            access_token = token_info.get('access_token')
-            if not access_token:
-                logger.error(f"[❌] Нет токена Performance для {store}")
-                errors += 1
-                continue
-        except Exception as e:
-            logger.error(f"[❌] Ошибка получения токена для {store}: {e}")
-            errors += 1
-            continue
-
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
-        url = "https://api-performance.ozon.ru:443/api/client/statistics/json"
-
-        # Ozon API ограничивает запрос максимум 10 кампаниями за раз
-        campaign_ids = list(ad_items.values_list('ozon_campaign_id', flat=True))
-        batch_size = 10
-        for i in range(0, len(campaign_ids), batch_size):
-            batch = [str(c) for c in campaign_ids[i:i + batch_size]]
-            payload = {
-                "campaigns": batch,
-                "from": date_from,
-                "to": date_to,
-                "groupBy": "NO_GROUP_BY",
-            }
-            refresh_attempts = 0
-            while True:
-                try:
-                    logger.info(f"[➡️ POST] /statistics/json {store} batch={len(batch)} {date_from}..{date_to}")
-                    resp = requests.post(url, headers=headers, json=payload, timeout=30)
-                except Exception as e:
-                    logger.error(f"[❌] Ошибка сети/запроса: {e}. Retry {retry_interval_sec}s…")
-                    time.sleep(retry_interval_sec)
-                    continue
-
-                if resp.status_code in (200, 201, 202):
-                    data = resp.json() if resp.text else {}
-                    uuid_val = data.get('UUID') or data.get('uuid')
-                    if not uuid_val:
-                        logger.warning(f"[⚠️] Нет UUID в ответе: {data}. Retry {retry_interval_sec}s…")
-                        time.sleep(retry_interval_sec)
-                        continue
-                    # Сохраняем одну запись на UUID и период; кампаний в payload может быть несколько — общий UUID
-                    first_campaign = batch[0]
-                    obj, created_flag = CampaignPerformanceReport.objects.get_or_create(
-                        store=store,
-                        ozon_campaign_id=str(first_campaign),
-                        date_from=start_local,
-                        date_to=end_local,
-                        defaults={
-                            'report_uuid': uuid_val,
-                            'status': CampaignPerformanceReport.STATUS_PENDING,
-                            'request_payload': payload,
-                        }
-                    )
-                    if not created_flag:
-                        obj.report_uuid = uuid_val
-                        obj.status = CampaignPerformanceReport.STATUS_PENDING
-                        obj.request_payload = payload
-                        obj.save(update_fields=['report_uuid', 'status', 'request_payload'])
-                        skipped += 1
-                    else:
-                        created += 1
-                    logger.info(f"[📨] Запрошен отчёт UUID={uuid_val} для {store} кампаний={len(batch)} {date_from}..{date_to}")
-                    break
-
-                if resp.status_code == 403:
-                    try:
-                        refresh_attempts += 1
-                        if refresh_attempts > 2:
-                            logger.error(f"[🔐] 403 для {store}, превышен лимит обновлений токена. Пропуск батча.")
-                            errors += 1
-                            break
-                        token_info = get_store_performance_token(store)
-                        access_token = token_info.get('access_token')
-                        headers["Authorization"] = f"Bearer {access_token}"
-                        logger.info(f"[🔐] Токен обновлён, повторяем через {retry_interval_sec}s…")
-                        time.sleep(retry_interval_sec)
-                        continue
-                    except Exception as t_err:
-                        logger.error(f"[❌] Не удалось обновить токен для {store}: {t_err}")
-                        errors += 1
-                        break
-
-                if resp.status_code == 429:
-                    # Лимит активных запросов — ждём, затем повторяем тот же батч
-                    logger.error(f"[❌] statistics/json {store}: 429 {resp.text}. Retry {retry_interval_sec}s…")
-                    time.sleep(retry_interval_sec)
-                    continue
-
-                # Прочие ошибки — лог и повтор
-                logger.error(f"[❌] statistics/json {store}: {resp.status_code} {resp.text}. Retry {retry_interval_sec}s…")
-                time.sleep(retry_interval_sec)
-                continue
-
-    return {"created": created, "skipped": skipped, "errors": errors}
-#-------------------------------------
-
 
 #--------Перерасчёт: Срабатывает при нажатии кнопки Обновить РК-------------
 @shared_task(name="Перерасчёт бюджета РК за период (с учётом потраченного)")
@@ -3766,6 +3634,8 @@ def fetch_performance_reports(max_reports: int = 50):
             # Поддерживаем 2 формата: одиночный и множественный по кампаниям
             from .models import CampaignPerformanceReportEntry
             top_level_report = data.get('report')
+            report_date = timezone.localtime(obj.date_from).date() if obj.date_from else timezone.localdate()
+
             if top_level_report:
                 # Считаем, что это одиночная кампания (или неизвестная) — используем parent.ozon_campaign_id
                 obj.rows = top_level_report.get('rows') if isinstance(top_level_report.get('rows'), list) else None
@@ -3774,9 +3644,11 @@ def fetch_performance_reports(max_reports: int = 50):
                 camp_id = obj.ozon_campaign_id or ''
                 if camp_id:
                     CampaignPerformanceReportEntry.objects.update_or_create(
-                        report=obj,
+                        store=obj.store,
                         ozon_campaign_id=str(camp_id),
+                        report_date=report_date,
                         defaults={
+                            'report': obj,
                             'rows': obj.rows,
                             'totals': obj.totals,
                         }
@@ -3794,9 +3666,11 @@ def fetch_performance_reports(max_reports: int = 50):
                     if rows is None and totals is None:
                         continue
                     CampaignPerformanceReportEntry.objects.update_or_create(
-                        report=obj,
+                        store=obj.store,
                         ozon_campaign_id=str(cid),
+                        report_date=report_date,
                         defaults={
+                            'report': obj,
                             'rows': rows,
                             'totals': totals,
                         }
@@ -3909,11 +3783,11 @@ def submit_auto_reports_for_day(date_str: str, store_id: int | None = None, batc
                         time.sleep(retry_interval_sec)
                         continue
 
-                    # Сохраняем PENDING отчёт; помечаем как MULTI для parent (детализация попадёт в entries)
+                    # Сохраняем PENDING отчёт; используем озон_campaign_id как 'MULTI:<UUID>'
                     try:
                         obj, _ = CampaignPerformanceReport.objects.update_or_create(
                             store=store,
-                            ozon_campaign_id='MULTI',
+                            ozon_campaign_id=f"MULTI:{uuid_val}",
                             date_from=day_start,
                             date_to=day_end,
                             defaults={
@@ -4046,6 +3920,8 @@ def update_auto_campaign_kpis_in_sheets(spreadsheet_url: str = None, sa_json_pat
 
         from .models import CampaignPerformanceReportEntry as ReportEntry
 
+        tz = timezone.get_current_timezone()
+
         def _to_decimal(x) -> Decimal:
             if x is None:
                 return Decimal('0')
@@ -4057,15 +3933,36 @@ def update_auto_campaign_kpis_in_sheets(spreadsheet_url: str = None, sa_json_pat
             except Exception:
                 return Decimal('0')
 
+        def _to_local_date(value) -> dt_date:
+            if isinstance(value, datetime):
+                val = value
+                if timezone.is_naive(val):
+                    val = timezone.make_aware(val, tz)
+                val = timezone.localtime(val, tz)
+                return val.date()
+            if isinstance(value, dt_date):
+                return value
+            return timezone.localdate()
+
+        def _day_start(value) -> datetime:
+            base_date = _to_local_date(value)
+            start_naive = datetime.combine(base_date, datetime.min.time())
+            return timezone.make_aware(start_naive, tz)
+
+        def _day_end(value) -> datetime:
+            start = _day_start(value)
+            return start + timedelta(days=1) - timedelta(microseconds=1)
+
         def _sum_from_creation(ad: AdPlanItem):
             start_dt = ad.ozon_created_at or ad.created_at
             # защитимся: если None, берём неделю назад
             if not start_dt:
                 start_dt = timezone.now() - timedelta(days=7)
+            start_date = _to_local_date(start_dt)
             qs = ReportEntry.objects.filter(
-                report__store=store,
+                store=store,
                 ozon_campaign_id=str(ad.ozon_campaign_id),
-                report__date_from__gte=start_dt.replace(hour=0, minute=0, second=0, microsecond=0),
+                report_date__gte=start_date,
             )
             sales_amount = Decimal('0')
             sales_units = Decimal('0')
@@ -4078,13 +3975,13 @@ def update_auto_campaign_kpis_in_sheets(spreadsheet_url: str = None, sa_json_pat
             return sales_amount, sales_units, spend
 
         def _drr_last_7_days(ad: AdPlanItem):
-            end_dt = timezone.now()
-            start_dt = (end_dt - timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0)
+            end_date = timezone.localdate()
+            start_date = end_date - timedelta(days=6)
             qs = ReportEntry.objects.filter(
-                report__store=store,
+                store=store,
                 ozon_campaign_id=str(ad.ozon_campaign_id),
-                report__date_from__gte=start_dt,
-                report__date_from__lte=end_dt,
+                report_date__gte=start_date,
+                report_date__lte=end_date,
             )
             sales_amount = Decimal('0')
             spend = Decimal('0')
@@ -4100,8 +3997,13 @@ def update_auto_campaign_kpis_in_sheets(spreadsheet_url: str = None, sa_json_pat
 
         def _total_sales_since_creation(ad: AdPlanItem):
             start_dt = ad.ozon_created_at or ad.created_at
+            if ad.sku == 1928762293:
+                logger.info(f"_total_sales_since_creation  start_dt = {start_dt}")
+                
+
             if not start_dt:
                 start_dt = timezone.now() - timedelta(days=7)
+            start_dt = _day_start(start_dt)
             qs = Sale.objects.filter(
                 store=store,
                 sku=ad.sku,
@@ -4118,8 +4020,10 @@ def update_auto_campaign_kpis_in_sheets(spreadsheet_url: str = None, sa_json_pat
             return amount, units
 
         def _total_sales_last_7_days(ad: AdPlanItem):
-            end_dt = timezone.now()
-            start_dt = end_dt - timedelta(days=6)
+            end_date = timezone.localdate()
+            start_date = end_date - timedelta(days=6)
+            start_dt = _day_start(start_date)
+            end_dt = _day_end(end_date)
             qs = Sale.objects.filter(
                 store=store,
                 sku=ad.sku,
@@ -4300,7 +4204,7 @@ def submit_reports_for_campaigns(campaign_ids: list[str], date_str: str, store_i
             try:
                 obj, _ = CampaignPerformanceReport.objects.update_or_create(
                     store=store,
-                    ozon_campaign_id='MULTI',
+                    ozon_campaign_id=f"MULTI:{uuid_val}",
                     date_from=day_start,
                     date_to=day_end,
                     defaults={
@@ -4493,10 +4397,10 @@ def monitor_auto_campaigns_weekly(reenable_hour: int = 9):
     def _sum_spend_for_period(ad: AdPlanItem, d_from: dt_date, d_to: dt_date) -> Decimal:
         total = Decimal('0')
         qs = CampaignPerformanceReportEntry.objects.filter(
-            report__store=ad.store,
+            store=ad.store,
             ozon_campaign_id=str(ad.ozon_campaign_id),
-            report__date_from__date__gte=d_from,
-            report__date_from__date__lte=d_to,
+            report_date__gte=d_from,
+            report_date__lte=d_to,
         ).only('totals')
         for e in qs.iterator():
             tot = e.totals or {}
