@@ -323,6 +323,7 @@ class AdPlanItem(models.Model):
     # Интеграция с Google Sheets
     google_sheet_row = models.PositiveIntegerField(null=True, blank=True, verbose_name="Номер строки в Google таблице")
     is_active_in_sheets = models.BooleanField(default=False, verbose_name="Активна в Google Sheets (колонка B)")
+    paused_due_to_low_stock = models.BooleanField(default=False, verbose_name="Отключена из-за низких остатков")
 
     # Места под KPI кампании (по желанию заполним отдельным таском)
     adv_sales_amount = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
@@ -373,6 +374,7 @@ class AdPlanItem(models.Model):
         return self.state in [
             self.CAMPAIGN_STATE_INACTIVE,
             self.CAMPAIGN_STATE_PAUSED,
+            self.CAMPAIGN_STATE_STOPPED,
             self.CAMPAIGN_STATE_ENDED,
             self.CAMPAIGN_STATE_ARCHIVED,
             self.CAMPAIGN_STATE_MODERATION_FAILED,
