@@ -222,7 +222,7 @@ class ProductDailyAnalyticsAdmin(admin.ModelAdmin):
 @admin.register(AdPlanItem)
 class AdPlanItemAdmin(admin.ModelAdmin):
     list_display = (
-        'id', 'store', 'sku', 'offer_id', 'week_budget', 'manual_budget', 'state', 'payment_type', 'has_existing_campaign', 'is_active_in_sheets', 'abc_label',
+        'id', 'store', 'sku', 'offer_id', 'week_budget', 'manual_budget', 'state_raw', 'payment_type', 'has_existing_campaign', 'is_active_in_sheets', 'abc_label',
         'ozon_campaign_id', 'campaign_name', 'campaign_type', 'ozon_created_at', 'ozon_updated_at', 'created_at'
     )
     list_filter = ('abc_label', 'store', 'campaign_type', 'state', 'payment_type', 'has_existing_campaign', 'is_active_in_sheets')
@@ -230,11 +230,14 @@ class AdPlanItemAdmin(admin.ModelAdmin):
     ordering = ('-created_at',)
     readonly_fields = ('created_at',)
 
-
+    @admin.display(description="Статус (Ozon)")
+    def state_raw(self, obj):
+        return obj.state
+    
 @admin.register(ManualCampaign)
 class ManualCampaignAdmin(admin.ModelAdmin):
     list_display = (
-        'id', 'name', 'ozon_campaign_id', 'sku', 'sku_list', 'offer_id', 'state', 'payment_type',
+        'id', 'name', 'ozon_campaign_id', 'sku', 'sku_list', 'offer_id', 'state_raw', 'payment_type',
         'week_budget', 'daily_budget', 'total_budget', 'store', 'ozon_created_at', 'ozon_updated_at', 'created_at', 'updated_at'
     )
     list_filter = (
@@ -249,7 +252,7 @@ class ManualCampaignAdmin(admin.ModelAdmin):
     search_fields = ('name', 'ozon_campaign_id', 'sku', 'offer_id', 'store__name', 'sku_list')
     ordering = ('-created_at',)
     readonly_fields = ('created_at', 'updated_at')
-    
+
     fieldsets = (
         ('Основная информация', {
             'fields': ('name', 'ozon_campaign_id', 'store')
@@ -273,6 +276,10 @@ class ManualCampaignAdmin(admin.ModelAdmin):
             'fields': ('ozon_created_at', 'ozon_updated_at', 'created_at', 'updated_at')
         }),
     )
+
+    @admin.display(description="Статус (Ozon)")
+    def state_raw(self, obj):
+        return obj.state
     
 class CampaignPerformanceReportEntryInline(admin.TabularInline):
     model = CampaignPerformanceReportEntry
