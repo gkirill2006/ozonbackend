@@ -1074,10 +1074,11 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
     Обновляет лист ABC из ProductDailyAnalytics.
     """
     
-    spreadsheet_url = spreadsheet_url or os.getenv(
-        "ABC_SPREADSHEET_URL",
-        "https://docs.google.com/spreadsheets/d/1-_XS6aRZbpeEPFDyxH3OV0IMbl_GUUEysl6ZJXoLmQQ",
-    )
+    # spreadsheet_url = spreadsheet_url or os.getenv(
+    #     "ABC_SPREADSHEET_URL",
+    #     "https://docs.google.com/spreadsheets/d/1-_XS6aRZbpeEPFDyxH3OV0IMbl_GUUEysl6ZJXoLmQQ",
+    # )
+    spreadsheet_url = "https://docs.google.com/spreadsheets/d/1eJO9j-Uod-3RI6RGrKuhyC2Ptv_oaa5RIggDXDXecmQ"
     sa_json_path = sa_json_path or os.getenv(
         "GOOGLE_SA_JSON_PATH",
         "/workspace/ozon-469708-c5f1eca77c02.json",
@@ -1096,6 +1097,7 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
 
     # Читаем параметры из Main_ADV одним батч-запросом
     ws_main = sh.worksheet('Main_ADV')
+    start_row = 13  # начало блока кампаний на листе
     # Настройки сдвинулись на один столбец вправо: теперь колонка T (и U для max цены)
     param_cells = ['V13','V14','V15','V16','W16','V17','V21','V18','V19','V20', 'V22', 'V23','V24','V25','V26', 'V27']
     param_vals = ws_main.batch_get([f'{c}:{c}' for c in param_cells])
@@ -1149,6 +1151,45 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
             or OzonStore.objects.filter(name__icontains=store_name_value).first()
             or OzonStore.objects.filter(client_id__icontains=store_name_value).first()
         )
+    # Сохраняем текущие значения ручных бюджетов (колонка K) по SKU
+    def _extract_sku(value) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, int):
+            return value
+        try:
+            s = str(value).strip()
+        except Exception:
+            return None
+        digits = ''.join(ch for ch in s if ch.isdigit())
+        if not digits:
+            return None
+        try:
+            return int(digits)
+        except ValueError:
+            return None
+
+    existing_manual_budget_by_sku: dict[int, Decimal] = {}
+    try:
+        col_g_values = ws_main.col_values(7)  # колонки G: SKU
+        total_rows = len(col_g_values)
+        end_row = total_rows if total_rows >= start_row else start_row - 1
+        if end_row >= start_row:
+            existing_rows = ws_main.get(f'G{start_row}:K{end_row}')
+            for row in existing_rows:
+                if not row or len(row) < 5:
+                    continue
+                sku_raw = row[0]
+                manual_budget_raw = row[4] if len(row) > 4 else ''
+                manual_budget_raw = '' if manual_budget_raw is None else str(manual_budget_raw).strip()
+                sku_int = _extract_sku(sku_raw)
+                if sku_int is None or manual_budget_raw == '':
+                    continue
+                manual_budget_dec = _parse_decimal(manual_budget_raw, manual_budget_raw or '0')
+                existing_manual_budget_by_sku[sku_int] = manual_budget_dec
+    except Exception as e:
+        logger.warning(f"[⚠️] Не удалось прочитать существующие ручные бюджеты из листа: {e}")
+
     # Исправлено описание координат: используем реальные V13..V27
     t_params = time.perf_counter(); logger.info(f"[⏱] Чтение параметров (V13..V27): {t_params - t_open:.3f}s")
     if not store:
@@ -1216,6 +1257,7 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
     agg_qs = (
         base_qs.values('offer_id', 'name', 'sku')
         .annotate(revenue_sum=Sum('revenue'), units_sum=Sum('ordered_units'))
+        .filter(revenue_sum__gt=0)
         .order_by('-revenue_sum')
     )
     t_qs = time.perf_counter(); logger.info(f"[⏱] ORM агрегация+сортировка: {t_qs - t_params:.3f}s (rows={agg_qs.count()})")
@@ -1515,8 +1557,8 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
             manual_budget_sum = ManualCampaign.objects.filter(
                 store=store,
                 state__in=[
-                    ManualCampaign.CAMPAIGN_STATE_RUNNING,
-                    ManualCampaign.CAMPAIGN_STATE_STOPPED
+                    ManualCampaign.CAMPAIGN_STATE_RUNNING
+                    # ManualCampaign.CAMPAIGN_STATE_STOPPED
                 ]
             ).aggregate(total_budget=Sum('week_budget'))['total_budget'] or Decimal('0')
             
@@ -1653,13 +1695,13 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
         if min_budget <= 0:
             raise ValueError('Минимальный бюджет (T22) должен быть > 0')
         
-        # Читаем список исключений из столбца Y
+        # Читаем список исключений из столбца AB
         exclusion_offer_ids = set()
         try:
-            # Читаем все значения из столбца Y, начиная с Y13
+            # Читаем все значения из столбца AB, начиная с AB3
             # col_values возвращает список строк для всего столбца
-            # Столбец Y имеет индекс 25. Нам нужны строки с 13-й, что соответствует индексу 12 в 0-индексированном списке
-            raw_exclusions = ws_main.col_values(25)[12:]  # Y13 и далее
+            # Столбец AB имеет индекс 28. Нам нужны строки с 13-й, что соответствует индексу 12 в 0-индексированном списке
+            raw_exclusions = ws_main.col_values(28)[12:]  # AB13 и далее
             for item in raw_exclusions:
                 item = item.strip()
                 if item:  # Обрабатываем только непустые элементы
@@ -1695,7 +1737,27 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
             if offer_id in exclusion_offer_ids:
                 logger.info(f"[🚫] offer_id '{offer_id}' находится в списке исключений, пропускаем.")
                 continue
+
+            avg_price_val = Decimal(str(r[4])) if len(r) > 4 and r[4] is not None else Decimal('0')
+            if price_min and price_min > 0 and avg_price_val < price_min:
+                continue
+            if price_max and price_max > 0 and avg_price_val > price_max:
+                continue
             
+            # Проверяем остатки FBS и FBO, если настройки заданы
+            if min_fbs_stock > 0 or min_fbo_stock > 0:
+                fbs_stock = fbs_by_sku.get(sku, 0)
+                fbo_stock = fbo_by_sku.get(sku, 0)
+                logger.info(f"[ℹ️] SKU {sku} проверяем остатки FBS = {fbs_stock} FBO = {fbo_stock}")
+                # Если остатки отсутствуют, пропускаем товар
+                
+                if min_fbs_stock > 0 and fbs_stock < min_fbs_stock:
+                    logger.info(f"[🚫] SKU {sku} исключен: остаток FBS {fbs_stock} < минимального {min_fbs_stock}")
+                    continue
+                    
+                if min_fbo_stock > 0 and fbo_stock < min_fbo_stock:
+                    logger.info(f"[🚫] SKU {sku} исключен: остаток FBO {fbo_stock} < минимального {min_fbo_stock}")
+                    continue            
             # T24: Добавлять товар, если уже есть РК (0 - не добавлять, 1 - добавлять)
             if add_existing_campaigns == 0:
                 # Проверяем, есть ли уже кампания для этого SKU
@@ -1766,26 +1828,7 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
                     logger.info(f"[📋] Добавлен SKU {sku} с существующей кампанией '{campaign_name}' (статус: {campaign_status})")
                     continue
                 
-            avg_price_val = Decimal(str(r[4])) if len(r) > 4 and r[4] is not None else Decimal('0')
-            if price_min and price_min > 0 and avg_price_val < price_min:
-                continue
-            if price_max and price_max > 0 and avg_price_val > price_max:
-                continue
-            
-            # Проверяем остатки FBS и FBO, если настройки заданы
-            if min_fbs_stock > 0 or min_fbo_stock > 0:
-                fbs_stock = fbs_by_sku.get(sku, 0)
-                fbo_stock = fbo_by_sku.get(sku, 0)
-                logger.info(f"[ℹ️] SKU {sku} проверяем остатки FBS = {fbs_stock} FBO = {fbo_stock}")
-                # Если остатки отсутствуют, пропускаем товар
-                
-                if min_fbs_stock > 0 and fbs_stock < min_fbs_stock:
-                    logger.info(f"[🚫] SKU {sku} исключен: остаток FBS {fbs_stock} < минимального {min_fbs_stock}")
-                    continue
-                    
-                if min_fbo_stock > 0 and fbo_stock < min_fbo_stock:
-                    logger.info(f"[🚫] SKU {sku} исключен: остаток FBO {fbo_stock} < минимального {min_fbo_stock}")
-                    continue
+
             
             selected.append(r)
         t_select = time.perf_counter(); logger.info(f"[⏱] Отбор TOP-N: {t_select - t_topn_start:.3f}s (selected={len(selected)})")
@@ -1849,7 +1892,7 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
             elif sku in auto_campaigns_dict and auto_campaigns_dict[sku].get('name'):
                 campaign_name_with_status = auto_campaigns_dict[sku]['name']
             else:
-                campaign_name_with_status = f"{offer_or_name} {_dt.now().strftime('%d/%m/%y')}"
+                campaign_name_with_status = f"{offer_or_name} {timezone.localtime().strftime('%d/%m/%y')}"
             
             # Если есть ручная кампания, добавляем статус
             if sku in manual_campaigns_dict:
@@ -1864,10 +1907,23 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
                 manual_campaign = ManualCampaign.objects.filter(store=store, sku=sku).first()
                 if manual_campaign:
                     manual_week_budget = float(manual_campaign.week_budget)
-            
+            sheet_manual_budget = existing_manual_budget_by_sku.get(_extract_sku(sku))
+            if sheet_manual_budget is not None:
+                if manual_week_budget in ('', None):
+                    manual_week_budget = float(sheet_manual_budget)
+                else:
+                    try:
+                        if Decimal(str(manual_week_budget)) == Decimal('0') and sheet_manual_budget != Decimal('0'):
+                            manual_week_budget = float(sheet_manual_budget)
+                    except Exception:
+                        manual_week_budget = float(sheet_manual_budget)
+
             # Получаем название товара по SKU из словаря
             product_name = sku_to_name_dict.get(sku, offer_or_name)
             
+            if isinstance(manual_week_budget, Decimal):
+                manual_week_budget = float(manual_week_budget)
+
             out_rows.append([
                 product_name,  # F: Название товара (артикул)
                 int(sku),  # G: SKU товара
@@ -1970,6 +2026,18 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
                 # Бюджеты кампании: неделя/день (если не заданы — 0)
                 manual_week_budget_val = float(campaign.week_budget or 0)
                 manual_day_budget_val = float(campaign.daily_budget or 0)
+                sheet_manual_budget = existing_manual_budget_by_sku.get(_extract_sku(sku))
+                if sheet_manual_budget is not None:
+                    try:
+                        if manual_week_budget_val == 0 and sheet_manual_budget != Decimal('0'):
+                            manual_week_budget_val = float(sheet_manual_budget)
+                            manual_day_budget_val = float((sheet_manual_budget / Decimal('7')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+                    except Exception:
+                        manual_week_budget_val = float(sheet_manual_budget)
+                        manual_day_budget_val = float((sheet_manual_budget / Decimal('7')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+
+                if isinstance(manual_week_budget_val, Decimal):
+                    manual_week_budget_val = float(manual_week_budget_val)
 
                 # Добавляем в out_rows с бюджетом кампании в колонке J (дневной)
                 out_rows.append([
@@ -1992,8 +2060,14 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
         
         logger.info(f"[📋] Добавлено товаров из ручных кампаний в конец списка: {existing_campaigns_added}")
 
-        start_row = 13
-        ws_main.batch_clear([f'A{start_row}:L1000', f'AX{start_row}:AX1000'])  # Очищаем рабочий блок и колонку долей
+        ws_main.batch_clear([f'A{start_row}:S1000', f'AX{start_row}:AX1000'])  # Очищаем рабочий блок и колонку долей
+
+        # Сбрасываем заливку в колонках H-I перед записью остатков (убираем серый цвет)
+        try:
+            default_fill = CellFormat(backgroundColor=Color(1, 1, 1))
+            format_cell_ranges(ws_main, [(f'H{start_row}:I1000', default_fill)])
+        except Exception as fmt_err:
+            logger.warning(f"[⚠️] Не удалось сбросить формат ячеек H{start_row}:I1000: {fmt_err}")
 
         # Словари остатков уже созданы выше
         if out_rows:
@@ -2142,7 +2216,7 @@ def rebalance_auto_weekly_budgets(
         today = timezone.localdate()
         if today.weekday() != 0:  # 0 = понедельник
             logger.info(f"[ℹ️] Сегодня {today:%d.%m.%Y} (weekday={today.weekday()}), не понедельник — перерасчёт пропущен")
-            # return {"skipped": True, "reason": "not monday"}
+            return {"skipped": True, "reason": "not monday"}
         
         
         spreadsheet_url = spreadsheet_url or os.getenv(
@@ -2361,6 +2435,20 @@ def rebalance_auto_weekly_budgets(
             f" Monthly budget={month_budget}, spent_auto={total_spent_auto}, spent_manual={total_spent_manual},"
             f" manual_reserved={manual_week_reserved}, weekly_pool={weekly_pool}"
         )
+
+        try:
+            ws.update('C8', [[float(manual_week_reserved)]], value_input_option='USER_ENTERED')
+        except Exception as c8_err:
+            logger.warning(f"[⚠️] Не удалось обновить C8 недельным бюджетом ручных кампаний: {c8_err}")
+
+        remaining_month_budget = month_budget - total_spent_manual - total_spent_auto - manual_week_reserved
+        if remaining_month_budget < 0:
+            remaining_month_budget = Decimal('0')
+        try:
+            ws.update('B9', [[float(remaining_month_budget)]], value_input_option='USER_ENTERED')
+        except Exception as b9_err:
+            logger.warning(f"[⚠️] Не удалось обновить B9 остатком бюджета: {b9_err}")
+
         return {
             "updated": updated_count,
             "weekly_pool": float(weekly_pool),
@@ -4502,6 +4590,8 @@ def submit_auto_reports_for_yesterday(store_id: int | None = None, batch_size: i
     Запрашивает отчёт за вчерашний день по всем автоматическим кампаниям (через submit_auto_reports_for_day).
     """
     date_str = (timezone.localdate() - timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    submit_manual_reports_for_day(date_str, store_id=store_id, batch_size=batch_size, retry_interval_sec=retry_interval_sec)
     return submit_auto_reports_for_day(date_str, store_id=store_id, batch_size=batch_size, retry_interval_sec=retry_interval_sec)
 #-------------------------------------
 #--------Performance: прод — обёртка на вчерашний день (ручные кампании)---------------
@@ -4598,6 +4688,30 @@ def update_auto_campaign_kpis_in_sheets(spreadsheet_url: str = None, sa_json_pat
             logger.error(f"[❌] Магазин '{store_name}' не найден")
             return {"error": f"store '{store_name}' not found"}
 
+        # Период для расчёта s_amount/s_units/s_spend (ячейка V28)
+        def _parse_period_days(value: str | None) -> int | None:
+            if not value:
+                return None
+            digits = ''.join(ch for ch in str(value) if ch.isdigit())
+            if not digits:
+                return None
+            try:
+                days_val = int(digits)
+                return days_val if days_val > 0 else None
+            except Exception:
+                return None
+
+        try:
+            raw_period = ws.acell('V28').value
+        except Exception as e:
+            logger.warning(f"[⚠️] Не удалось прочитать период V28: {e}")
+            raw_period = None
+        kpi_period_days = _parse_period_days(raw_period)
+        if kpi_period_days:
+            logger.info(f"[ℹ️] KPI период из V28: {kpi_period_days} дн.")
+        else:
+            logger.info("[ℹ️] KPI период V28 не задан — используем период с даты запуска кампании")
+
         from .models import CampaignPerformanceReportEntry as ReportEntry
 
         # Определяем границу, где начинаются ручные кампании (колонка E = 'Ручная'),
@@ -4650,11 +4764,15 @@ def update_auto_campaign_kpis_in_sheets(spreadsheet_url: str = None, sa_json_pat
             return start + timedelta(days=1) - timedelta(microseconds=1)
 
         def _sum_from_creation(ad: AdPlanItem):
-            start_dt = ad.ozon_created_at or ad.created_at
-            # защитимся: если None, берём неделю назад
-            if not start_dt:
-                start_dt = timezone.now() - timedelta(days=7)
-            start_date = _to_local_date(start_dt)
+            end_date = timezone.localdate()
+            if kpi_period_days:
+                start_date = end_date - timedelta(days=kpi_period_days - 1)
+            else:
+                start_dt = ad.ozon_created_at or ad.created_at
+                # защитимся: если None, берём неделю назад
+                if not start_dt:
+                    start_dt = timezone.now() - timedelta(days=7)
+                start_date = _to_local_date(start_dt)
             if ad.sku == 1914100274:
                 logger.info(f"start_date  = {start_date}")
             qs = ReportEntry.objects.filter(
@@ -4662,6 +4780,8 @@ def update_auto_campaign_kpis_in_sheets(spreadsheet_url: str = None, sa_json_pat
                 ozon_campaign_id=str(ad.ozon_campaign_id),
                 report_date__gte=start_date,
             )
+            if kpi_period_days:
+                qs = qs.filter(report_date__lte=end_date)
             sales_amount = Decimal('0')
             sales_units = Decimal('0')
             spend = Decimal('0')
@@ -4697,14 +4817,10 @@ def update_auto_campaign_kpis_in_sheets(spreadsheet_url: str = None, sa_json_pat
 
         def _total_sales_since_creation(ad: AdPlanItem):
             start_dt = ad.ozon_created_at or ad.created_at
-            
-                
 
             if not start_dt:
                 start_dt = timezone.now() - timedelta(days=7)
             start_dt = _day_start(start_dt)
-            # if ad.sku == 1914100274:
-            #     logger.info(f"_total_sales_since_creation  start_dt = {start_dt}")
             qs = Sale.objects.filter(
                 store=store,
                 sku=ad.sku,
@@ -4718,7 +4834,6 @@ def update_auto_campaign_kpis_in_sheets(spreadsheet_url: str = None, sa_json_pat
                     units += int(s.quantity)
                 except Exception:
                     continue
-                
 
             return amount, units
         
@@ -4746,6 +4861,7 @@ def update_auto_campaign_kpis_in_sheets(spreadsheet_url: str = None, sa_json_pat
         empty_rows = 0
         processed = 0
         updated = 0
+        processed_campaign_ids: set[str] = set()
 
         while empty_rows < max_empty_rows:
             end_row = current_row + block_size - 1
@@ -4755,6 +4871,9 @@ def update_auto_campaign_kpis_in_sheets(spreadsheet_url: str = None, sa_json_pat
                 end_row = min(end_row, manual_start_row - 1)
                 if end_row < current_row:
                     break
+            height = end_row - current_row + 1
+            if height <= 0:
+                break
             try:
                 colA = ws.get(f'A{current_row}:A{end_row}') or []
             except Exception as e:
@@ -4762,12 +4881,12 @@ def update_auto_campaign_kpis_in_sheets(spreadsheet_url: str = None, sa_json_pat
                 break
 
             if not colA:
-                empty_rows += block_size
-                current_row += block_size
+                empty_rows += height
+                current_row = end_row + 1
                 continue
 
             # заготовим выходной массив M..S пустыми (7 столбцов)
-            out_MS = [['', '', '', '', '', '', ''] for _ in range(block_size)]
+            out_MS = [['', '', '', '', '', '', ''] for _ in range(height)]
 
             block_has_any = False
             for i, row_vals in enumerate(colA):
@@ -4785,6 +4904,8 @@ def update_auto_campaign_kpis_in_sheets(spreadsheet_url: str = None, sa_json_pat
                 ad = AdPlanItem.objects.filter(store=store, ozon_campaign_id=campaign_id).first()
                 if not ad:
                     continue
+
+                processed_campaign_ids.add(str(ad.ozon_campaign_id))
 
                 # Рассчитываем KPI
                 s_amount, s_units, s_spend = _sum_from_creation(ad)
@@ -4831,7 +4952,28 @@ def update_auto_campaign_kpis_in_sheets(spreadsheet_url: str = None, sa_json_pat
             except Exception as e:
                 logger.error(f"[❌] Ошибка записи блока M{current_row}:S{end_row}: {e}")
 
-            current_row += block_size
+            current_row = end_row + 1
+
+        # Суммируем месячный расход авто-кампаний и пишем в B10
+        total_month_spend = Decimal('0')
+        if processed_campaign_ids:
+            try:
+                month_start = timezone.localdate().replace(day=1)
+                month_entries = ReportEntry.objects.filter(
+                    store=store,
+                    ozon_campaign_id__in=list(processed_campaign_ids),
+                    report_date__gte=month_start,
+                    report_date__lte=timezone.localdate(),
+                )
+                for entry in month_entries.iterator():
+                    totals = entry.totals or {}
+                    total_month_spend += _to_decimal(totals.get('moneySpent'))
+            except Exception as spend_err:
+                logger.warning(f"[⚠️] Не удалось посчитать месячный расход авто-кампаний: {spend_err}")
+        try:
+            ws.update('B10', [[float(total_month_spend)]], value_input_option='USER_ENTERED')
+        except Exception as b10_err:
+            logger.warning(f"[⚠️] Не удалось обновить B10 расходом авто-кампаний: {b10_err}")
 
         logger.info(f"[📊] Обновление KPI завершено: обработано {processed}, записано {updated}")
         return {"processed": processed, "updated": updated}
@@ -5223,8 +5365,10 @@ def monitor_auto_campaigns_weekly(reenable_hour: int = 9):
                 continue
 
             week_budget = _dec(ad.week_budget or 0)
-            # Базовый лимит после обучения — равномерно
-            base_day_limit = (week_budget / Decimal('7')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            manual_budget = _dec(ad.manual_budget or 0)
+            effective_week_budget = manual_budget if manual_budget > Decimal('0') else week_budget
+            # Базовый лимит после обучения — равномерно (используем ручной бюджет, если он задан)
+            base_day_limit = (effective_week_budget / Decimal('7')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
             # Определяем, закончился ли период обучения в текущей неделе
             train_end_date = started_at.date() + timedelta(days=max(t_days - 1, 0))
@@ -5248,7 +5392,7 @@ def monitor_auto_campaigns_weekly(reenable_hour: int = 9):
             else:
                 # Обучение завершилось ранее — используем базовый лимит. 
                 # Дневной бюджет уменьшаем на 10% чтобы не было перерасхода. Т.к. существуют задержки в обновлении данных
-                day_limit = ((week_budget / Decimal('7')) * Decimal('0.9')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                day_limit = ((effective_week_budget / Decimal('7')) * Decimal('0.9')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
 
 
@@ -5364,6 +5508,29 @@ def update_manual_campaign_kpis_in_sheets(
             logger.error(f"[❌] Магазин '{store_name}' не найден для обновления ручных кампаний")
             return {"error": f"store '{store_name}' not found"}
 
+        def _parse_period_days(value: str | None) -> int | None:
+            if not value:
+                return None
+            digits = ''.join(ch for ch in str(value) if ch.isdigit())
+            if not digits:
+                return None
+            try:
+                days_val = int(digits)
+                return days_val if days_val > 0 else None
+            except Exception:
+                return None
+
+        try:
+            raw_period = ws.acell('V28').value
+        except Exception as e:
+            logger.warning(f"[⚠️] Не удалось прочитать период V28 для ручных кампаний: {e}")
+            raw_period = None
+        manual_kpi_period_days = _parse_period_days(raw_period)
+        if manual_kpi_period_days:
+            logger.info(f"[ℹ️] KPI период (ручные кампании) из V28: {manual_kpi_period_days} дн.")
+        else:
+            logger.info("[ℹ️] KPI период V28 не задан — используем месячный период по умолчанию")
+
         def _parse_int_cell(value) -> int:
             if not value:
                 return 0
@@ -5476,6 +5643,10 @@ def update_manual_campaign_kpis_in_sheets(
         today = timezone.localdate()
         month_start = today.replace(day=1)
         week_start = today - timedelta(days=6)
+        if manual_kpi_period_days:
+            adv_period_start = today - timedelta(days=manual_kpi_period_days - 1)
+        else:
+            adv_period_start = month_start
 
         from .models import CampaignPerformanceReportEntry as ReportEntry
 
@@ -5488,13 +5659,13 @@ def update_manual_campaign_kpis_in_sheets(
             except Exception:
                 return default
 
-        month_entries = ReportEntry.objects.filter(
+        adv_entries = ReportEntry.objects.filter(
             store=store,
             ozon_campaign_id__in=campaign_ids,
-            report_date__gte=month_start,
+            report_date__gte=adv_period_start,
             report_date__lte=today,
         )
-        for entry in month_entries.iterator():
+        for entry in adv_entries.iterator():
             data = campaign_data.get(entry.ozon_campaign_id)
             if not data:
                 continue
@@ -5516,6 +5687,20 @@ def update_manual_campaign_kpis_in_sheets(
             totals = entry.totals or {}
             data['orders_money_7'] += _to_decimal(totals.get('ordersMoney'))
             data['spend_7'] += _to_decimal(totals.get('moneySpent'))
+
+        manual_month_spend = Decimal('0')
+        try:
+            month_spend_entries = ReportEntry.objects.filter(
+                store=store,
+                ozon_campaign_id__in=campaign_ids,
+                report_date__gte=month_start,
+                report_date__lte=today,
+            )
+            for entry in month_spend_entries.iterator():
+                totals = entry.totals or {}
+                manual_month_spend += _to_decimal(totals.get('moneySpent'))
+        except Exception as spend_err:
+            logger.warning(f"[⚠️] Не удалось посчитать месячный расход ручных кампаний: {spend_err}")
 
         amount_expr = ExpressionWrapper(F('quantity') * F('price'), output_field=DecimalField(max_digits=18, decimal_places=2))
         sales_month = {
@@ -5653,6 +5838,11 @@ def update_manual_campaign_kpis_in_sheets(
         ws.update(f'A{manual_start}:L{manual_end}', rows_al, value_input_option='USER_ENTERED')
         ws.update(f'M{manual_start}:S{manual_end}', rows_ms, value_input_option='USER_ENTERED')
         ws.update(f'AX{manual_start}:AX{manual_end}', [[''] for _ in rows_al])
+
+        try:
+            ws.update('C10', [[float(manual_month_spend)]], value_input_option='USER_ENTERED')
+        except Exception as c10_err:
+            logger.warning(f"[⚠️] Не удалось обновить C10 месячным расходом ручных кампаний: {c10_err}")
 
         format_cell_ranges(ws, [(
             f'H{manual_start}:I{manual_end}',
