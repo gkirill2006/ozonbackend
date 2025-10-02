@@ -12,6 +12,7 @@ class OzonStore(models.Model):
     name = models.CharField(max_length=255, blank=True)  # название магазина (по желанию)
     client_id = models.CharField(max_length=100)
     api_key = models.CharField(max_length=255)
+    google_sheet_url = models.URLField(blank=True, null=True)  # ссылка на Google-таблицу магазина
     
     # Performance API
     performance_service_account_number = models.CharField(max_length=50, blank=True, null=True)

@@ -21,7 +21,7 @@ class UserAdmin(BaseUserAdmin):
 
 @admin.register(OzonStore)
 class OzonStoreAdmin(admin.ModelAdmin):
-    list_display = ('name', 'client_id', 'api_key')
+    list_display = ('name', 'client_id', 'api_key',)
     actions = ['sync_selected_stores']
 
     @admin.action(description="🔁 Синхронизировать выбранные магазины")
