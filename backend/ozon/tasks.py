@@ -3,8 +3,8 @@ from celery import shared_task
 from django.utils import timezone
 from users.models import OzonStore
 from .models import (DeliveryCluster, DeliveryClusterItemAnalytics, DeliveryAnalyticsSummary, Category, ProductType,
-                     Product, WarehouseStock, Sale, FbsStock, ProductDailyAnalytics, AdPlanItem, 
-                     OzonStore, ManualCampaign)
+                     Product, WarehouseStock, Sale, FbsStock, ProductDailyAnalytics, AdPlanItem,
+                     OzonStore, ManualCampaign, CampaignPerformanceReportEntry)
 
 from .utils import create_cpc_product_campaign, update_campaign_budget, activate_campaign, deactivate_campaign
 
@@ -1490,7 +1490,6 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
         # Если нужно, учитываем уже потраченный бюджет с начала текущего месяца
         if int(consider_spent or 0) == 1:
             try:
-                from .models import CampaignPerformanceReportEntry
                 # Начало текущего месяца (1-е число)
                 since_date_consider = timezone.localdate().replace(day=1)
                 spent_sum = Decimal('0')
@@ -1711,6 +1710,23 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
             logger.error(f"[❌] Ошибка при чтении списка исключений из Main_ADV!Y: {e}")
         
         logger.info(f"[ℹ️] Список исключений (offer_id) из Main_ADV!Y: {exclusion_offer_ids}")
+
+        # Читаем список обязательных товаров из столбца AC (обязательные offer_id)
+        mandatory_offer_ids_list: list[str] = []
+        mandatory_offer_ids_set: set[str] = set()
+        try:
+            raw_mandatory = ws_main.col_values(29)[12:]  # AC13 и далее
+            for item in raw_mandatory:
+                item = (item or '').strip()
+                if not item:
+                    break  # останавливаемся при первом пустом значении
+                if item not in mandatory_offer_ids_set:
+                    mandatory_offer_ids_set.add(item)
+                    mandatory_offer_ids_list.append(item)
+        except Exception as e:
+            logger.error(f"[❌] Ошибка при чтении списка обязательных товаров из Main_ADV!Z: {e}")
+
+        logger.info(f"[ℹ️] Список обязательных offer_id из Main_ADV!Z: {mandatory_offer_ids_list}")
         
         n_max = int((budget_total_ONE_WEEK // min_budget)) if min_budget > 0 else 0
         if 'max_items' in locals() and max_items and max_items > 0:
@@ -1833,9 +1849,37 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
             selected.append(r)
         t_select = time.perf_counter(); logger.info(f"[⏱] Отбор TOP-N: {t_select - t_topn_start:.3f}s (selected={len(selected)})")
 
-        # Если max_items > 0, перерасчёт: используем первые max_items (n_max уже равен max_items)
-        if selected and max_items and max_items > 0:
-            selected = selected[:int(max_items)]
+        # Гарантируем, что обязательные товары попали в выборку
+        selected_offer_ids = {str(row[0]).strip() for row in selected if row and len(row) > 0}
+        mandatory_added = 0
+        for offer_id in mandatory_offer_ids_list:
+            if offer_id in exclusion_offer_ids:
+                logger.info(f"[⚠️] Обязательный offer_id '{offer_id}' присутствует в списке исключений — пропускаем")
+                continue
+            if offer_id in selected_offer_ids:
+                continue
+            candidate = next((row for row in rows if str(row[0]).strip() == offer_id), None)
+            if candidate:
+                selected.append(candidate)
+                selected_offer_ids.add(offer_id)
+                mandatory_added += 1
+                logger.info(f"[⭐] Добавлен обязательный offer_id '{offer_id}' в выборку")
+            else:
+                logger.warning(f"[⚠️] Обязательный offer_id '{offer_id}' не найден среди данных — пропущен")
+
+        if mandatory_added:
+            logger.info(f"[ℹ️] Добавлено обязательных товаров: {mandatory_added}")
+
+        # Если max_items > 0, перерасчёт: используем максимум, но обязательные товары не удаляем
+        if selected and max_items and max_items > 0 and len(selected) > int(max_items):
+            max_items_int = int(max_items)
+            mandatory_selected = [row for row in selected if str(row[0]).strip() in mandatory_offer_ids_set]
+            optional_selected = [row for row in selected if str(row[0]).strip() not in mandatory_offer_ids_set]
+
+            if len(mandatory_selected) >= max_items_int:
+                selected = mandatory_selected[:max_items_int]
+            else:
+                selected = mandatory_selected + optional_selected[:max_items_int - len(mandatory_selected)]
         # for t_data in selected:
         #     logger.info(t_data)
         # Пропорциональное распределение по выбранным товарам:
@@ -2293,8 +2337,6 @@ def rebalance_auto_weekly_budgets(
             logger.error(f"[❌] Магазин '{store_name}' не найден")
             return {"error": f"store '{store_name}' not found"}
 
-        from .models import CampaignPerformanceReportEntry
-
         month_budget = _parse_decimal(ws.acell('B5').value)
         min_budget = _parse_decimal(ws.acell('V22').value)
         min_budget = max(min_budget, Decimal('0'))
@@ -2337,7 +2379,9 @@ def rebalance_auto_weekly_budgets(
         total_spent_manual = _sum_spend(manual_campaign_ids)
         total_spent_auto = _sum_spend(auto_campaign_ids)
 
-        available_month_budget = month_budget - total_spent_manual - total_spent_auto - manual_week_reserved
+        # available_month_budget = month_budget - total_spent_manual - total_spent_auto - manual_week_reserved
+        available_month_budget = month_budget - total_spent_manual - total_spent_auto
+
         if available_month_budget < 0:
             available_month_budget = Decimal('0')
 
@@ -2346,7 +2390,7 @@ def rebalance_auto_weekly_budgets(
             logger.info(f"[ℹ️] Нет дней для перерасчёта (period_days={period_days})")
             return {"skipped": True, "reason": "period days zero"}
 
-        weekly_pool = (available_month_budget / Decimal(days_left)) * Decimal(period_days) if days_left else Decimal('0')
+        weekly_pool = (available_month_budget / Decimal(days_left)) * Decimal(period_days) - manual_week_reserved if days_left else Decimal('0')
         weekly_pool = max(weekly_pool, Decimal('0'))
 
         col_e = ws.col_values(5)
@@ -2400,6 +2444,7 @@ def rebalance_auto_weekly_budgets(
 
         per_campaign_equal = (weekly_pool / Decimal(len(auto_rows))) if weekly_pool > 0 else Decimal('0')
 
+        # === Шаг 1. Первичный расчёт ===
         new_budgets: dict[str, Decimal] = {}
         for row in auto_rows:
             if weekly_pool <= 0:
@@ -2408,16 +2453,50 @@ def rebalance_auto_weekly_budgets(
                 week_amount = weekly_pool * (row['share'] / share_sum)
             else:
                 week_amount = per_campaign_equal
+
+            # Применяем минимальный бюджет
             if min_budget > 0:
                 week_amount = max(week_amount, min_budget)
+
             week_amount = week_amount.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
             new_budgets[row['campaign_id']] = week_amount
 
+        # === Шаг 2. Проверяем общий лимит ===
         total_assigned = sum(new_budgets.values())
+
         if weekly_pool > 0 and total_assigned > weekly_pool:
-            scale = (weekly_pool / total_assigned) if total_assigned > 0 else Decimal('0')
-            for cid in list(new_budgets.keys()):
-                new_budgets[cid] = (new_budgets[cid] * scale).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            # Разделяем кампании: с минимальным бюджетом и выше
+            min_locked = {cid: b for cid, b in new_budgets.items() if b <= min_budget}
+            adjustable = {cid: b for cid, b in new_budgets.items() if b > min_budget}
+
+            # Сколько остаётся после вычета минималок
+            remaining_pool = weekly_pool - sum(min_locked.values())
+
+            if remaining_pool < 0:
+                # Если даже минимальные бюджеты превышают пул — уменьшаем пропорционально
+                scale = weekly_pool / total_assigned
+                for cid in new_budgets:
+                    new_budgets[cid] = (new_budgets[cid] * scale).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            else:
+                # Масштабируем только те, что выше минимума
+                total_adjustable = sum(adjustable.values())
+                if total_adjustable > 0:
+                    scale = remaining_pool / total_adjustable
+                    for cid in adjustable:
+                        new_budgets[cid] = (new_budgets[cid] * scale).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+        # === Итоговое выравнивание (минимальная погрешность) ===
+        total_assigned = sum(new_budgets.values())
+        diff = weekly_pool - total_assigned
+        if abs(diff) >= Decimal('0.01'):
+            # Корректируем первую кампанию на разницу (чтобы сумма совпала)
+            first_key = next(iter(new_budgets))
+            new_budgets[first_key] += diff
+            new_budgets[first_key] = new_budgets[first_key].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+
+
+
 
         auto_map = {str(item.ozon_campaign_id): item for item in auto_items}
         batch_updates = []
@@ -2441,24 +2520,34 @@ def rebalance_auto_weekly_budgets(
                     logger.warning(f"[⚠️] Не удалось сохранить бюджеты для кампании {cid}: {save_err}")
             updated_count += 1
 
-        # if batch_updates:
-        #     ws.batch_update(batch_updates, value_input_option='USER_ENTERED')
+        if batch_updates:
+            logger.info(f"{batch_updates}")
+            ws.batch_update(batch_updates, value_input_option='USER_ENTERED')
 
         logger.info(
             f"[✅] Перерасчёт бюджетов завершён. Авто кампаний: {len(auto_rows)}."
             f" Monthly budget={month_budget}, spent_auto={total_spent_auto}, spent_manual={total_spent_manual},"
-            f" manual_reserved={manual_week_reserved}, weekly_pool={weekly_pool}"
+            f" Всего израсходованно={total_spent_auto + total_spent_manual},"
+            f" Недельный ручной бюджет={manual_week_reserved}, Итого осталось бюджета для авто компаний на неделю={weekly_pool}"
         )
 
         try:
             ws.update('C8', [[float(manual_week_reserved)]], value_input_option='USER_ENTERED')
+            ws.update('C6', [[float((available_month_budget / Decimal(days_left)) * Decimal(period_days))]], value_input_option='USER_ENTERED')
+            ws.update('D6', [[float((available_month_budget / Decimal(days_left)) * Decimal(1))]], value_input_option='USER_ENTERED')
+
+            ws.update('E6', [[datetime.now().strftime('%d/%m/%y')]])
+
         except Exception as c8_err:
             logger.warning(f"[⚠️] Не удалось обновить C8 недельным бюджетом ручных кампаний: {c8_err}")
 
-        remaining_month_budget = month_budget - total_spent_manual - total_spent_auto - manual_week_reserved
+        # remaining_month_budget = month_budget - total_spent_manual - total_spent_auto - manual_week_reserved
+        remaining_month_budget = month_budget - total_spent_manual - total_spent_auto
+
         if remaining_month_budget < 0:
             remaining_month_budget = Decimal('0')
         try:
+            ws.update('B6', [[float(remaining_month_budget)]], value_input_option='USER_ENTERED')            
             ws.update('B9', [[float(remaining_month_budget)]], value_input_option='USER_ENTERED')
         except Exception as b9_err:
             logger.warning(f"[⚠️] Не удалось обновить B9 остатком бюджета: {b9_err}")
@@ -3319,12 +3408,67 @@ def sync_campaign_activity_with_sheets(
         dict: Статистика синхронизации
     """
     logger.info(f"[🔄] Начало синхронизации активности кампаний с Google Sheets")
-    
+
+    sa_json_path = sa_json_path or os.getenv(
+        "GOOGLE_SA_JSON_PATH",
+        "/workspace/ozon-469708-c5f1eca77c02.json",
+    )
+
+    store_hint = None
+    if not spreadsheet_url:
+        stores = list(
+            OzonStore.objects.exclude(google_sheet_url__isnull=True).exclude(google_sheet_url='')
+        )
+        if not stores:
+            logger.info("[ℹ️] Нет магазинов с заполненным google_sheet_url — синхронизация пропущена")
+            return {"processed": 0, "results": [], "skipped": [{"reason": "no stores"}]}
+
+        if len(stores) > 1:
+            results: list[dict] = []
+            errors: list[dict] = []
+            skipped: list[dict] = []
+            for store in stores:
+                sheet_url = (store.google_sheet_url or '').strip()
+                if not sheet_url:
+                    skipped.append({"store_id": store.id, "reason": "no google_sheet_url"})
+                    continue
+                res = sync_campaign_activity_with_sheets(
+                    spreadsheet_url=sheet_url,
+                    sa_json_path=sa_json_path,
+                    worksheet_name=worksheet_name,
+                    start_row=start_row,
+                    block_size=block_size,
+                )
+                entry = {"store_id": store.id}
+                if isinstance(res, dict):
+                    entry.update(res)
+                if entry.get("error"):
+                    errors.append(entry)
+                elif entry.get("skipped"):
+                    skipped.append(entry)
+                else:
+                    results.append(entry)
+
+            summary = {"processed": len(results), "results": results}
+            if skipped:
+                summary["skipped"] = skipped
+            if errors:
+                summary["errors"] = errors
+            return summary
+
+        store_hint = stores[0]
+        spreadsheet_url = (store_hint.google_sheet_url or '').strip()
+        if not spreadsheet_url:
+            logger.warning(f"[⚠️] У магазина {store_hint} отсутствует google_sheet_url")
+            return {"skipped": True, "reason": "no google_sheet_url", "store_id": store_hint.id}
+    else:
+        store_hint = OzonStore.objects.filter(google_sheet_url=spreadsheet_url).first()
+
+    if not spreadsheet_url:
+        logger.error("[❌] Не указан spreadsheet_url для синхронизации")
+        return {"error": "spreadsheet_url not provided"}
+
     try:
-        spreadsheet_url = spreadsheet_url or "https://docs.google.com/spreadsheets/d/1-_XS6aRZbpeEPFDyxH3OV0IMbl_GUUEysl6ZJXoLmQQ"
-        sa_json_path = sa_json_path or "/workspace/ozon-469708-c5f1eca77c02.json"
-        
-        # Подключение к Google Sheets
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = Credentials.from_service_account_file(sa_json_path, scopes=scope)
         client = gspread.authorize(creds)
@@ -3337,10 +3481,15 @@ def sync_campaign_activity_with_sheets(
         try:
             store_name = ws.acell('V23').value
             if not store_name or store_name.strip() == "":
-                logger.error(f"[❌] Ячейка T23 пустая - не указан магазин")
-                return {"error": "Не указан магазин в T23"}
+                logger.error(f"[❌] Ячейка V23 пустая - не указан магазин")
+                return {"error": "Не указан магазин в V23"}
             
-            store = OzonStore.objects.filter(name=store_name.strip()).first()
+            store = store_hint or OzonStore.objects.filter(google_sheet_url=spreadsheet_url).first()
+            if not store:
+                store = (
+                    OzonStore.objects.filter(name__iexact=store_name.strip()).first()
+                    or OzonStore.objects.filter(client_id__iexact=store_name.strip()).first()
+                )
             if not store:
                 logger.error(f"[❌] Магазин '{store_name}' не найден в базе данных")
                 return {"error": f"Магазин '{store_name}' не найден"}
@@ -4126,129 +4275,6 @@ def _resolve_store_for_campaign(ozon_campaign_id: str, store_id: int | None = No
     return ap.store if ap else None
 
 
-@shared_task(name="Performance: эксперимент — запросить дневные отчёты по кампании")
-def submit_daily_reports_for_campaign(
-    ozon_campaign_id: str,
-    start_date: str,
-    days: int = 10,
-    store_id: int | None = None,
-    poll_interval_sec: int = 10,
-):
-    """
-    Формирует N (по умолчанию 10) отчётов по одной кампании — по одному на каждый день, начиная с start_date.
-    Использует параметры, аналогичные примеру: {"campaigns":[...], "dateFrom":"YYYY-MM-DD", "dateTo":"YYYY-MM-DD", "groupBy":"NO_GROUP_BY"}.
-    """
-    from .models import CampaignPerformanceReport
-    from .utils import get_store_performance_token
-
-    store = _resolve_store_for_campaign(ozon_campaign_id, store_id)
-    if not store:
-        logger.error(f"[❌] Не удалось определить магазин для кампании {ozon_campaign_id}")
-        return {"created": 0, "errors": 1}
-
-    # Токен Performance API
-    token_info = get_store_performance_token(store)
-    access_token = token_info.get('access_token')
-    logger.info(f"access_token = {access_token}")
-    if not access_token:
-        logger.error(f"[❌] Нет access_token для магазина {store}")
-        return {"created": 0, "errors": 1}
-
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
-    url = "https://api-performance.ozon.ru:443/api/client/statistics/json"
-
-    # Парсим дату начала
-    try:
-        base = datetime.strptime(start_date, "%Y-%m-%d")
-    except Exception as e:
-        logger.error(f"[❌] Некорректная дата start_date='{start_date}': {e}")
-        return {"created": 0, "errors": 1}
-
-    created = 0
-    uuids = []
-    errors = 0
-
-    for i in range(int(days)):
-        d = base + timedelta(days=i)
-        day_str = d.strftime("%Y-%m-%d")
-        payload = {
-            "campaigns": [str(ozon_campaign_id)],
-            "dateFrom": day_str,
-            "dateTo": day_str,
-            "groupBy": "NO_GROUP_BY",
-        }
-        # Бесконечные попытки для текущего дня, пока не получим UUID (учёт лимита 429)
-        while True:
-            try:
-                logger.info(f"[➡️ POST] /statistics/json for {store} campaign={ozon_campaign_id} day={day_str}")
-                resp = requests.post(url, headers=headers, json=payload, timeout=30)
-            except Exception as e:
-                logger.error(f"[❌] Ошибка сети/запроса для {day_str}: {e}")
-                time.sleep(poll_interval_sec)
-                continue
-
-            if resp.status_code in (200, 201, 202):
-                data = resp.json() if resp.text else {}
-                uuid_val = data.get('UUID') or data.get('uuid')
-                if not uuid_val:
-                    logger.warning(f"[⚠️] Нет UUID в ответе для {day_str}: {data}. Повтор через {poll_interval_sec}s")
-                    time.sleep(poll_interval_sec)
-                    continue
-
-                # Сохраняем запись отчёта
-                day_start = _make_aware(d.replace(hour=0, minute=0, second=0, microsecond=0))
-                day_end = _make_aware(d.replace(hour=23, minute=59, second=59, microsecond=999999))
-                try:
-                    obj, _ = CampaignPerformanceReport.objects.update_or_create(
-                        store=store,
-                        ozon_campaign_id=str(ozon_campaign_id),
-                        date_from=day_start,
-                        date_to=day_end,
-                        defaults={
-                            'report_uuid': uuid_val,
-                            'status': CampaignPerformanceReport.STATUS_PENDING,
-                            'request_payload': payload,
-                        }
-                    )
-                    created += 1
-                    uuids.append(uuid_val)
-                    logger.info(f"[📨] Запрошен отчёт UUID={uuid_val} для кампании {ozon_campaign_id} за {day_str}")
-                    break  # переходим к следующему дню
-                except Exception as db_err:
-                    logger.error(f"[💾❌] Ошибка записи отчёта в БД за {day_str}: {db_err}. Повтор через {poll_interval_sec}s")
-                    time.sleep(poll_interval_sec)
-                    continue
-
-            # Обработка 403 — обновляем токен и повторяем
-            if resp.status_code == 403:
-                try:
-                    token_info = get_store_performance_token(store)
-                    access_token = token_info.get('access_token')
-                    headers["Authorization"] = f"Bearer {access_token}"
-                    logger.info(f"[🔐] 403 для {store} {day_str}. Обновили токен, повторяем после {poll_interval_sec}s…")
-                except Exception as t_err:
-                    logger.error(f"[🔐] Не удалось обновить токен для {store}: {t_err}")
-                time.sleep(poll_interval_sec)
-                continue
-
-            # Обработка лимита 429 — ждём и повторяем тот же день
-            if resp.status_code == 429:
-                logger.info(f"[⏳] Лимит активных отчётов (429) для {day_str}. Ждём {poll_interval_sec}s и пробуем снова…")
-                time.sleep(poll_interval_sec)
-                continue
-
-            # Другие ошибки — лог и повтор через интервал (чтобы довести все дни)
-            logger.error(f"[❌] statistics/json {store}: {resp.status_code} {resp.text}. Повтор через {poll_interval_sec}s")
-            time.sleep(poll_interval_sec)
-            continue
-
-    return {"created": created, "errors": errors, "uuids": uuids}
-
-
 #--------Performance: получить готовые отчёты — по UUID вытягивает результаты и помечает READY/ERROR---------------
 #-------Запускаем раз в час желательно страт 00:30
 @shared_task(name="Performance: получить готовые отчёты")
@@ -4344,7 +4370,6 @@ def fetch_performance_reports(max_reports: int = 50):
             obj.raw_response = data
 
             # Поддерживаем 2 формата: одиночный и множественный по кампаниям
-            from .models import CampaignPerformanceReportEntry
             top_level_report = data.get('report')
             report_date = timezone.localtime(obj.date_from).date() if obj.date_from else timezone.localdate()
 
@@ -4462,15 +4487,15 @@ def submit_campaign_reports_for_day(
         return {"created": 0, "errors": 1}
 
     for store in stores_qs:
-        # Пропускаем магазины, где система рекламы выключена
-        try:
-            from .models import StoreAdControl
-            control = StoreAdControl.objects.filter(store=store).first()
-            if control and not control.is_system_enabled:
-                logger.info(f"[⛔] StoreAdControl выключен для {store}. Пропускаем запрос отчётов за {date_str}.")
-                continue
-        except Exception as ctrl_err:
-            logger.warning(f"[⚠️] Не удалось проверить StoreAdControl для {store}: {ctrl_err}")
+        # # Пропускаем магазины, где система рекламы выключена
+        # try:
+        #     from .models import StoreAdControl
+        #     control = StoreAdControl.objects.filter(store=store).first()
+        #     if control and not control.is_system_enabled:
+        #         logger.info(f"[⛔] StoreAdControl выключен для {store}. Пропускаем запрос отчётов за {date_str}.")
+        #         continue
+        # except Exception as ctrl_err:
+        #     logger.warning(f"[⚠️] Не удалось проверить StoreAdControl для {store}: {ctrl_err}")
 
         # Собираем campaign_id подходящих кампаний
         campaign_model = campaign_config["model"]
@@ -4619,7 +4644,7 @@ def submit_auto_reports_for_yesterday(store_id: int | None = None, batch_size: i
     date_str = (timezone.localdate() - timedelta(days=1)).strftime("%Y-%m-%d")
     
     submit_manual_reports_for_day(date_str, store_id=store_id, batch_size=batch_size, retry_interval_sec=retry_interval_sec)
-    return submit_auto_reports_for_day(date_str, store_id=store_id, batch_size=batch_size, retry_interval_sec=retry_interval_sec)
+    submit_auto_reports_for_day(date_str, store_id=store_id, batch_size=batch_size, retry_interval_sec=retry_interval_sec)
 #-------------------------------------
 #--------Performance: прод — обёртка на вчерашний день (ручные кампании)---------------
 @shared_task(name="Performance: прод — дневной отчёт за вчера (ручные кампании)")
@@ -4656,40 +4681,83 @@ def submit_manual_reports_for_today(store_id: int | None = None, batch_size: int
 #--------Performance: заполнение KPI авто-кампаний из отчётов и обновление Google Sheets (M..P)---------------
 # Запускается раз в час, данные формируются из наших внутренних моделей
 @shared_task(name="Performance:  — KPI авто-кампаний в Sheets (M..S) раз в час")
-def update_auto_campaign_kpis_in_sheets(spreadsheet_url: str = None, sa_json_path: str = None, worksheet_name: str = "Main_ADV", start_row: int = 13, block_size: int = 100):
+def update_auto_campaign_kpis_in_sheets(
+    spreadsheet_url: str = None,
+    sa_json_path: str = None,
+    worksheet_name: str = "Main_ADV",
+    start_row: int = 13,
+    block_size: int = 100,
+):
     """
-    1) Считывает данные листа  блоками.
+    1) Считывает данные листа блоками.
     2) Для строк с campaign_id (колонка A) берёт только автоматические кампании (AdPlanItem) текущего магазина.
-    3) Считает KPI и записывает в AdPlanItem:
-       - adv_sales_amount = сумма ordersMoney с даты создания кампании (ozon_created_at или created_at)
-       - adv_sales_units  = сумма orders за тот же период
-       - adv_spend        = сумма moneySpent за тот же период
-       - adv_drr_percent  = за последние 7 дней: spend7 / sales7 * 100, 1 знак после запятой (мат. округление)
-    4) Дополнительно считает продажи товара из общей модели Sale:
-       - total_sales_amount = сумма(quantity*price) по SKU с даты старта кампании
-       - total_sales_units  = сумма(quantity) по SKU с даты старта кампании
-       - tacos_percent      = за последние 7 дней: adv_spend7 / total_sales_amount7 * 100 (1 знак после запятой)
-    5) Обновляет таблицу: столбцы
-       M: adv_sales_amount
-       N: adv_sales_units
-       O: adv_spend
-       P: adv_drr_percent
-       Q: total_sales_amount
-       R: total_sales_units
-       S: tacos_percent
+    3) Считает KPI и записывает в AdPlanItem.
+    4) Обновляет таблицу в диапазоне M..S.
+    Если URL не передан, перебирает все магазины с заполненным `google_sheet_url`.
     """
-    try:
-        # Настройки URL/кредов
-        spreadsheet_url = spreadsheet_url or os.getenv(
-            "ABC_SPREADSHEET_URL",
-            "https://docs.google.com/spreadsheets/d/1-_XS6aRZbpeEPFDyxH3OV0IMbl_GUUEysl6ZJXoLmQQ",
-        )
-        sa_json_path = sa_json_path or os.getenv(
-            "GOOGLE_SA_JSON_PATH",
-            "/workspace/ozon-469708-c5f1eca77c02.json",
-        )
 
-        # Авторизация в Google Sheets
+    logger.info("[🔄] Начало обновления KPI авто-кампаний")
+
+    sa_json_path = sa_json_path or os.getenv(
+        "GOOGLE_SA_JSON_PATH",
+        "/workspace/ozon-469708-c5f1eca77c02.json",
+    )
+
+    store_hint = None
+    if not spreadsheet_url:
+        stores = list(
+            OzonStore.objects.exclude(google_sheet_url__isnull=True).exclude(google_sheet_url='')
+        )
+        if not stores:
+            logger.info("[ℹ️] Нет магазинов с заполненным google_sheet_url — обновление пропущено")
+            return {"processed": 0, "results": [], "skipped": [{"reason": "no stores"}]}
+
+        if len(stores) > 1:
+            results: list[dict] = []
+            errors: list[dict] = []
+            skipped: list[dict] = []
+            for store in stores:
+                sheet_url = (store.google_sheet_url or '').strip()
+                if not sheet_url:
+                    skipped.append({"store_id": store.id, "reason": "no google_sheet_url"})
+                    continue
+                res = update_auto_campaign_kpis_in_sheets(
+                    spreadsheet_url=sheet_url,
+                    sa_json_path=sa_json_path,
+                    worksheet_name=worksheet_name,
+                    start_row=start_row,
+                    block_size=block_size,
+                )
+                entry = {"store_id": store.id}
+                if isinstance(res, dict):
+                    entry.update(res)
+                if entry.get("error"):
+                    errors.append(entry)
+                elif entry.get("skipped"):
+                    skipped.append(entry)
+                else:
+                    results.append(entry)
+
+            summary = {"processed": len(results), "results": results}
+            if skipped:
+                summary["skipped"] = skipped
+            if errors:
+                summary["errors"] = errors
+            return summary
+
+        store_hint = stores[0]
+        spreadsheet_url = (store_hint.google_sheet_url or '').strip()
+        if not spreadsheet_url:
+            logger.warning(f"[⚠️] У магазина {store_hint} отсутствует google_sheet_url")
+            return {"skipped": True, "reason": "no google_sheet_url", "store_id": store_hint.id}
+    else:
+        store_hint = OzonStore.objects.filter(google_sheet_url=spreadsheet_url).first()
+
+    if not spreadsheet_url:
+        logger.error("[❌] Не указан spreadsheet_url для обновления KPI")
+        return {"error": "spreadsheet_url not provided"}
+
+    try:
         scopes = [
             'https://www.googleapis.com/auth/spreadsheets',
             'https://www.googleapis.com/auth/drive'
@@ -4702,18 +4770,30 @@ def update_auto_campaign_kpis_in_sheets(spreadsheet_url: str = None, sa_json_pat
         ws = sh.worksheet(worksheet_name)
         logger.info(f"[⏱] Открытие таблицы: {time.perf_counter() - t0:.3f}s")
 
-        # Магазин из ячейки V23
         store_name = (ws.acell('V23').value or '').strip()
         if not store_name:
             logger.error("[❌] V23 (store) пусто — прерывание")
             return {"error": "store not set in V23"}
-        store = (
-            OzonStore.objects.filter(name__iexact=store_name).first()
-            or OzonStore.objects.filter(client_id__iexact=store_name).first()
+
+        store = store_hint or (
+            OzonStore.objects.filter(google_sheet_url=spreadsheet_url).first()
         )
+        if not store:
+            store = (
+                OzonStore.objects.filter(name__iexact=store_name).first()
+                or OzonStore.objects.filter(client_id__iexact=store_name).first()
+            )
         if not store:
             logger.error(f"[❌] Магазин '{store_name}' не найден")
             return {"error": f"store '{store_name}' not found"}
+
+        auto_campaign_ids = list(
+            AdPlanItem.objects.filter(store=store)
+            .exclude(ozon_campaign_id__isnull=True)
+            .exclude(ozon_campaign_id='')
+            .values_list('ozon_campaign_id', flat=True)
+        )
+        auto_campaign_ids = [str(cid) for cid in auto_campaign_ids]
 
         # Период для расчёта s_amount/s_units/s_spend (ячейка V28)
         def _parse_period_days(value: str | None) -> int | None:
@@ -4738,8 +4818,6 @@ def update_auto_campaign_kpis_in_sheets(spreadsheet_url: str = None, sa_json_pat
             logger.info(f"[ℹ️] KPI период из V28: {kpi_period_days} дн.")
         else:
             logger.info("[ℹ️] KPI период V28 не задан — используем период с даты запуска кампании")
-
-        from .models import CampaignPerformanceReportEntry as ReportEntry
 
         # Определяем границу, где начинаются ручные кампании (колонка E = 'Ручная'),
         # чтобы не перезаписывать их показатели
@@ -4794,15 +4872,16 @@ def update_auto_campaign_kpis_in_sheets(spreadsheet_url: str = None, sa_json_pat
             end_date = timezone.localdate()
             if kpi_period_days:
                 start_date = end_date - timedelta(days=kpi_period_days - 1)
+                logger.info(f"if kpi_period_days start_date = {start_date}")
             else:
                 start_dt = ad.ozon_created_at or ad.created_at
                 # защитимся: если None, берём неделю назад
                 if not start_dt:
                     start_dt = timezone.now() - timedelta(days=7)
                 start_date = _to_local_date(start_dt)
-            if ad.sku == 1914100274:
+            if ad.sku == 1928762293:
                 logger.info(f"start_date  = {start_date}")
-            qs = ReportEntry.objects.filter(
+            qs = CampaignPerformanceReportEntry.objects.filter(
                 store=store,
                 ozon_campaign_id=str(ad.ozon_campaign_id),
                 report_date__gte=start_date,
@@ -4824,7 +4903,7 @@ def update_auto_campaign_kpis_in_sheets(spreadsheet_url: str = None, sa_json_pat
         def _drr_last_7_days(ad: AdPlanItem):
             end_date = timezone.localdate()
             start_date = end_date - timedelta(days=6)
-            qs = ReportEntry.objects.filter(
+            qs = CampaignPerformanceReportEntry.objects.filter(
                 store=store,
                 ozon_campaign_id=str(ad.ozon_campaign_id),
                 report_date__gte=start_date,
@@ -4983,12 +5062,12 @@ def update_auto_campaign_kpis_in_sheets(spreadsheet_url: str = None, sa_json_pat
 
         # Суммируем месячный расход авто-кампаний и пишем в B10
         total_month_spend = Decimal('0')
-        if processed_campaign_ids:
+        if auto_campaign_ids:
             try:
                 month_start = timezone.localdate().replace(day=1)
-                month_entries = ReportEntry.objects.filter(
+                month_entries = CampaignPerformanceReportEntry.objects.filter(
                     store=store,
-                    ozon_campaign_id__in=list(processed_campaign_ids),
+                    ozon_campaign_id__in=auto_campaign_ids,
                     report_date__gte=month_start,
                     report_date__lte=timezone.localdate(),
                 )
@@ -5002,242 +5081,44 @@ def update_auto_campaign_kpis_in_sheets(spreadsheet_url: str = None, sa_json_pat
         except Exception as b10_err:
             logger.warning(f"[⚠️] Не удалось обновить B10 расходом авто-кампаний: {b10_err}")
 
+        # Обновляем остаток месячного бюджета (B9 = B5 - расход за месяц по всем кампаниям)
+        try:
+            month_budget_raw = ws.acell('B5').value
+            month_budget = _to_decimal(month_budget_raw)
+        except Exception as b5_err:
+            logger.warning(f"[⚠️] Не удалось прочитать B5 (месячный бюджет): {b5_err}")
+            month_budget = Decimal('0')
+
+        total_spent_month = Decimal('0')
+        try:
+            month_start = timezone.localdate().replace(day=1)
+            today = timezone.localdate()
+            spend_entries = CampaignPerformanceReportEntry.objects.filter(
+                store=store,
+                report_date__gte=month_start,
+                report_date__lte=today,
+            )
+            for entry in spend_entries.iterator():
+                totals = entry.totals or {}
+                total_spent_month += _to_decimal(totals.get('moneySpent'))
+        except Exception as spend_err:
+            logger.warning(f"[⚠️] Не удалось посчитать трату с начала месяца: {spend_err}")
+
+        remaining_month_budget = month_budget - total_spent_month
+        if remaining_month_budget < 0:
+            remaining_month_budget = Decimal('0')
+
+        try:
+            ws.update('B9', [[float(remaining_month_budget)]], value_input_option='USER_ENTERED')
+        except Exception as b9_err:
+            logger.warning(f"[⚠️] Не удалось обновить B9 остатком бюджета: {b9_err}")
+
         logger.info(f"[📊] Обновление KPI завершено: обработано {processed}, записано {updated}")
-        return {"processed": processed, "updated": updated}
+        return {"processed": processed, "updated": updated, "store_id": getattr(store, 'id', None)}
 
     except Exception as e:
         logger.error(f"[❌] Ошибка update_auto_campaign_kpis_in_sheets: {e}")
         return {"error": str(e)}
-
-
-
-#--------Performance: прод — запросить дневной отчёт по списку кампаний---------------
-@shared_task(name="Performance: прод — запросить дневной отчёт по списку кампаний")
-def submit_reports_for_campaigns(campaign_ids: list[str], date_str: str, store_id: int, retry_interval_sec: int = 10):
-    """
-    Версия для явного списка campaign_id (для одного магазина). С ретраями 429.
-    """
-    if not campaign_ids:
-        return {"created": 0, "errors": 0, "uuids": []}
-    try:
-        base = datetime.strptime(date_str, "%Y-%m-%d")
-    except Exception as e:
-        logger.error(f"[❌] Некорректная дата date_str='{date_str}': {e}")
-        return {"created": 0, "errors": 1}
-    day_start = _make_aware(base.replace(hour=0, minute=0, second=0, microsecond=0))
-    day_end = _make_aware(base.replace(hour=23, minute=59, second=59, microsecond=999999))
-
-    store = OzonStore.objects.filter(id=store_id).first()
-    if not store:
-        return {"created": 0, "errors": 1, "message": "store not found"}
-
-    from .utils import get_store_performance_token
-    from .models import CampaignPerformanceReport
-
-    try:
-        token_info = get_store_performance_token(store)
-        access_token = token_info.get('access_token')
-        if not access_token:
-            raise Exception("Нет access_token")
-    except Exception as e:
-        logger.error(f"[❌] Токен Performance не получен для {store}: {e}")
-        return {"created": 0, "errors": 1}
-
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
-    url = "https://api-performance.ozon.ru:443/api/client/statistics/json"
-    batch = [str(x) for x in campaign_ids]
-    payload = {
-        "campaigns": batch,
-        "dateFrom": date_str,
-        "dateTo": date_str,
-        "groupBy": "NO_GROUP_BY",
-    }
-
-    uuids = []
-    created = 0
-    errors = 0
-
-    refresh_attempts = 0
-    while True:
-        try:
-            logger.info(f"[➡️ POST] /statistics/json {store} campaigns={len(batch)} for {date_str}")
-            resp = requests.post(url, headers=headers, json=payload, timeout=30)
-        except Exception as e:
-            logger.error(f"[❌] Ошибка сети/запроса: {e}. Retry {retry_interval_sec}s…")
-            time.sleep(retry_interval_sec)
-            continue
-
-        if resp.status_code in (200, 201, 202):
-            data = resp.json() if resp.text else {}
-            uuid_val = data.get('UUID') or data.get('uuid')
-            if not uuid_val:
-                logger.warning(f"[⚠️] Нет UUID в ответе: {data}. Retry {retry_interval_sec}s…")
-                time.sleep(retry_interval_sec)
-                continue
-            try:
-                obj, _ = CampaignPerformanceReport.objects.update_or_create(
-                    store=store,
-                    ozon_campaign_id=f"MULTI:{uuid_val}",
-                    date_from=day_start,
-                    date_to=day_end,
-                    defaults={
-                        'report_uuid': uuid_val,
-                        'status': CampaignPerformanceReport.STATUS_PENDING,
-                        'request_payload': payload,
-                    }
-                )
-                created += 1
-                uuids.append(uuid_val)
-                logger.info(f"[📨] UUID={uuid_val} сохранён (store={store}, campaigns={len(batch)}, {date_str})")
-            except Exception as db_err:
-                logger.error(f"[💾❌] Ошибка записи отчёта в БД: {db_err}. Retry {retry_interval_sec}s…")
-                time.sleep(retry_interval_sec)
-                continue
-            break
-
-        if resp.status_code == 403:
-            # Протухший токен — обновим и повторим
-            try:
-                refresh_attempts += 1
-                if refresh_attempts > 2:
-                    logger.error(f"[🔐] 403 для {store}, превышен лимит обновлений токена.")
-                    errors += 1
-                    break
-                token_info = get_store_performance_token(store)
-                access_token = token_info.get('access_token')
-                headers["Authorization"] = f"Bearer {access_token}"
-                logger.info(f"[🔐] Обновили токен для {store}, повторяем запрос…")
-                time.sleep(retry_interval_sec)
-                continue
-            except Exception as t_err:
-                logger.error(f"[❌] Не удалось обновить токен после 403: {t_err}")
-                errors += 1
-                break
-
-        if resp.status_code == 429:
-            logger.info(f"[⏳] 429 лимит активных отчётов. Ждём {retry_interval_sec}s и пробуем снова…")
-            time.sleep(retry_interval_sec)
-            continue
-
-        logger.error(f"[❌] statistics/json {store}: {resp.status_code} {resp.text}. Retry {retry_interval_sec}s…")
-        time.sleep(retry_interval_sec)
-        continue
-
-    return {"created": created, "errors": errors, "uuids": uuids}
-#-------------------------------------
-
-#-- Функция была написана для теста. С ее помощью можно запросить отчет по любой компании--------------------------
-@shared_task(name="Performance: эксперимент — получить дневные отчёты по кампании")
-def fetch_daily_reports_for_campaign(ozon_campaign_id: str, store_id: int | None = None, max_reports: int = 10):
-    """
-    Забирает готовые отчёты по указанной кампании (PENDING → READY/ERROR), максимум max_reports за запуск.
-    """
-    from .models import CampaignPerformanceReport
-    from .utils import get_store_performance_token
-
-    # Режим выборки по кампании (и по магазину, если задан)
-    qs = CampaignPerformanceReport.objects.filter(
-        ozon_campaign_id=str(ozon_campaign_id),
-        status=CampaignPerformanceReport.STATUS_PENDING,
-    ).order_by('requested_at')
-    if store_id:
-        qs = qs.filter(store_id=store_id)
-
-    processed = 0
-    ready = 0
-    failed = 0
-
-    for obj in qs[:max_reports]:
-        processed += 1
-        obj.last_checked_at = timezone.now()
-        try:
-            store = obj.store
-            token_info = get_store_performance_token(store)
-            access_token = token_info.get('access_token')
-            if not access_token:
-                raise Exception("Нет access_token")
-            headers = {
-                "Authorization": f"Bearer {access_token}",
-                "Accept": "application/json",
-            }
-            url = f"https://api-performance.ozon.ru:443/api/client/statistics/report?UUID={obj.report_uuid}"
-            resp = requests.get(url, headers=headers, timeout=30)
-
-            if resp.status_code in (401, 403):
-                # Токен мог протухнуть — обновим и повторим один раз
-                try:
-                    token_info = get_store_performance_token(store)
-                    access_token = token_info.get('access_token')
-                    headers["Authorization"] = f"Bearer {access_token}"
-                    time.sleep(1)
-                    resp = requests.get(url, headers=headers, timeout=30)
-                except Exception as t_err:
-                    logger.error(f"[🔐] Не удалось обновить токен для GET отчёта {obj.report_uuid}: {t_err}")
-
-            if resp.status_code == 202:
-                obj.save(update_fields=['last_checked_at'])
-                continue
-            if resp.status_code != 200:
-                obj.status = CampaignPerformanceReport.STATUS_ERROR
-                obj.error_message = f"{resp.status_code} {resp.text}"
-                obj.save(update_fields=['status', 'error_message', 'last_checked_at'])
-                failed += 1
-                continue
-
-            data = resp.json() if resp.text else {}
-            obj.raw_response = data
-            from .models import CampaignPerformanceReportEntry as CPR_Entry
-            top_level_report = data.get('report')
-            if top_level_report:
-                obj.rows = top_level_report.get('rows') if isinstance(top_level_report.get('rows'), list) else None
-                obj.totals = top_level_report.get('totals') if isinstance(top_level_report.get('totals'), dict) else None
-                camp_id = obj.ozon_campaign_id or ''
-                if camp_id:
-                    CPR_Entry.objects.update_or_create(
-                        report=obj,
-                        ozon_campaign_id=str(camp_id),
-                        defaults={
-                            'rows': obj.rows,
-                            'totals': obj.totals,
-                        }
-                    )
-            else:
-                obj.rows = None
-                obj.totals = None
-                for cid, payload in data.items():
-                    if not isinstance(payload, dict):
-                        continue
-                    rep = payload.get('report') or {}
-                    rows = rep.get('rows') if isinstance(rep.get('rows'), list) else None
-                    totals = rep.get('totals') if isinstance(rep.get('totals'), dict) else None
-                    if rows is None and totals is None:
-                        continue
-                    CPR_Entry.objects.update_or_create(
-                        report=obj,
-                        ozon_campaign_id=str(cid),
-                        defaults={
-                            'rows': rows,
-                            'totals': totals,
-                        }
-                    )
-
-            obj.status = CampaignPerformanceReport.STATUS_READY
-            obj.ready_at = timezone.now()
-            obj.save(update_fields=['raw_response', 'rows', 'totals', 'status', 'ready_at', 'last_checked_at'])
-            ready += 1
-            logger.info(f"[📥] Получен отчёт UUID={obj.report_uuid} для кампании {ozon_campaign_id}")
-        except Exception as e:
-            obj.status = CampaignPerformanceReport.STATUS_ERROR
-            obj.error_message = str(e)
-            obj.save(update_fields=['status', 'error_message', 'last_checked_at'])
-            failed += 1
-
-    return {"processed": processed, "ready": ready, "failed": failed}
-#-------------------------------------
 
 
 def _update_campaign_statuses_in_sheets(store):
@@ -5245,73 +5126,82 @@ def _update_campaign_statuses_in_sheets(store):
     try:
         import gspread
         from google.oauth2.service_account import Credentials
-        
-        # Подключение к Google Sheets
-        spreadsheet_url = "https://docs.google.com/spreadsheets/d/1-_XS6aRZbpeEPFDyxH3OV0IMbl_GUUEysl6ZJXoLmQQ"
-        sa_json_path = "/workspace/ozon-469708-c5f1eca77c02.json"
-        
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds = Credentials.from_service_account_file(sa_json_path, scopes=scope)
+
+        spreadsheet_url = (store.google_sheet_url or '').strip()
+        if not spreadsheet_url:
+            logger.warning(f"[⚠️] Пропускаем обновление статусов: у магазина {store} не задан google_sheet_url")
+            return
+
+        sa_json_path = os.getenv(
+            "GOOGLE_SA_JSON_PATH",
+            "/workspace/ozon-469708-c5f1eca77c02.json",
+        )
+
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
+        creds = Credentials.from_service_account_file(sa_json_path, scopes=scopes)
         client = gspread.authorize(creds)
-        
-        # Открываем таблицу и лист
+
         spreadsheet = client.open_by_url(spreadsheet_url)
         ws = spreadsheet.worksheet("Main_ADV")
-        
-        # Локальная функция для перевода статусов автоматических кампаний
-        def _translate_auto_campaign_status(status):
-            """Переводит статус автоматической кампании на русский язык"""
+
+        def _translate_auto_campaign_status(status: str) -> str:
             status_translations = {
                 'PREVIEW': 'Предпросмотр',
                 'ACTIVATED': 'Активирована',
                 'UNKNOWN': 'Неизвестно',
-                'CAMPAIGN_STATE_RUNNING': 'Запущена',
-                'CAMPAIGN_STATE_ACTIVE': 'Активна',
-                'CAMPAIGN_STATE_INACTIVE': 'Неактивна',
-                'CAMPAIGN_STATE_PLANNED': 'Запланирована',
-                'CAMPAIGN_STATE_STOPPED': 'Остановлена (превышен бюджет)',
-                'CAMPAIGN_STATE_ARCHIVED': 'Архивная',
-                'CAMPAIGN_STATE_FINISHED': 'Завершена',
-                'CAMPAIGN_STATE_PAUSED': 'Приостановлена',
-                'CAMPAIGN_STATE_ENDED': 'Завершена',
-                'CAMPAIGN_STATE_MODERATION_DRAFT': 'Черновик модерации',
-                'CAMPAIGN_STATE_MODERATION_IN_PROGRESS': 'На модерации',
-                'CAMPAIGN_STATE_MODERATION_FAILED': 'Не прошла модерацию',
-                'CAMPAIGN_STATE_UNKNOWN': 'Неизвестно',
+                AdPlanItem.CAMPAIGN_STATE_RUNNING: 'Запущена',
+                AdPlanItem.CAMPAIGN_STATE_ACTIVE: 'Активна',
+                AdPlanItem.CAMPAIGN_STATE_INACTIVE: 'Неактивна',
+                AdPlanItem.CAMPAIGN_STATE_PLANNED: 'Запланирована',
+                AdPlanItem.CAMPAIGN_STATE_STOPPED: 'Остановлена (превышен бюджет)',
+                AdPlanItem.CAMPAIGN_STATE_ARCHIVED: 'Архивная',
+                AdPlanItem.CAMPAIGN_STATE_FINISHED: 'Завершена',
+                AdPlanItem.CAMPAIGN_STATE_PAUSED: 'Приостановлена',
+                AdPlanItem.CAMPAIGN_STATE_ENDED: 'Завершена',
+                AdPlanItem.CAMPAIGN_STATE_MODERATION_DRAFT: 'Черновик модерации',
+                AdPlanItem.CAMPAIGN_STATE_MODERATION_IN_PROGRESS: 'На модерации',
+                AdPlanItem.CAMPAIGN_STATE_MODERATION_FAILED: 'Не прошла модерацию',
+                AdPlanItem.CAMPAIGN_STATE_UNKNOWN: 'Неизвестно',
             }
             return status_translations.get(status, 'Неизвестно')
-        
-        # Читаем все кампании из базы данных для этого магазина
+
         ad_plan_items = AdPlanItem.objects.filter(store=store).exclude(ozon_campaign_id__isnull=True).exclude(ozon_campaign_id='')
-        
+        if not ad_plan_items.exists():
+            logger.info(f"[ℹ️] У магазина {store} нет автоматических кампаний для обновления статусов")
+            return
+
+        try:
+            a_values = ws.col_values(1)
+        except Exception as col_err:
+            logger.error(f"[❌] Не удалось прочитать колонку A для {store}: {col_err}")
+            return
+
+        index_map = {
+            str(value).strip(): idx
+            for idx, value in enumerate(a_values, start=1)
+            if str(value).strip()
+        }
+
         status_updates = []
         for ad_plan_item in ad_plan_items:
-            if not ad_plan_item.ozon_campaign_id:
+            cid = str(ad_plan_item.ozon_campaign_id).strip()
+            row_idx = index_map.get(cid)
+            if not row_idx:
                 continue
-                
-            # Определяем актуальный статус с учетом флага низких остатков
+
             if ad_plan_item.paused_due_to_low_stock:
                 actual_status = "Неактивна (низкие остатки)"
             else:
-                # Используем функцию перевода статуса
                 actual_status = _translate_auto_campaign_status(ad_plan_item.state)
-            
-            # Находим строку с этим campaign_id в таблице
-            try:
-                # Читаем колонку A для поиска campaign_id
-                a_values = ws.col_values(1)
-                for row_idx, campaign_id in enumerate(a_values, 1):
-                    if str(campaign_id).strip() == str(ad_plan_item.ozon_campaign_id).strip():
-                        status_updates.append({
-                            'range': f'C{row_idx}',
-                            'values': [[actual_status]]
-                        })
-                        logger.debug(f"[📝] Обновляем статус для кампании {ad_plan_item.ozon_campaign_id} в строке {row_idx}: {actual_status}")
-                        break
-            except Exception as find_err:
-                logger.warning(f"[⚠️] Не удалось найти строку для кампании {ad_plan_item.ozon_campaign_id}: {find_err}")
-        
-        # Применяем все обновления статусов одним запросом
+
+            status_updates.append({
+                'range': f'C{row_idx}',
+                'values': [[actual_status]]
+            })
+
         if status_updates:
             ws.batch_update(status_updates)
             logger.info(f"[✅] Обновлено {len(status_updates)} статусов в колонке C для магазина {store}")
@@ -5337,7 +5227,7 @@ def monitor_auto_campaigns_weekly(reenable_hour: int = 9):
     week_end = week_start + timedelta(days=6)             # Вс
     checked = stopped = resumed = skipped_training = 0
 
-    from .models import CampaignPerformanceReportEntry, StoreAdControl
+    from .models import StoreAdControl
 
     def _dec(x) -> Decimal:
         try:
@@ -5702,9 +5592,8 @@ def update_manual_campaign_kpis_in_sheets(
             else:
                 adv_period_start = month_start
 
-            from .models import CampaignPerformanceReportEntry as ReportEntry
 
-            adv_entries = ReportEntry.objects.filter(
+            adv_entries = CampaignPerformanceReportEntry.objects.filter(
                 store=store,
                 ozon_campaign_id__in=campaign_ids,
                 report_date__gte=adv_period_start,
@@ -5749,7 +5638,7 @@ def update_manual_campaign_kpis_in_sheets(
                 data['adv_sales_units'] += _to_decimal(totals.get('orders'))
                 data['adv_spend'] += _to_decimal(totals.get('moneySpent'))
 
-            week_entries = ReportEntry.objects.filter(
+            week_entries = CampaignPerformanceReportEntry.objects.filter(
                 store=store,
                 ozon_campaign_id__in=campaign_ids,
                 report_date__gte=week_start,
@@ -5765,7 +5654,7 @@ def update_manual_campaign_kpis_in_sheets(
 
             manual_month_spend = Decimal('0')
             try:
-                month_spend_entries = ReportEntry.objects.filter(
+                month_spend_entries = CampaignPerformanceReportEntry.objects.filter(
                     store=store,
                     ozon_campaign_id__in=campaign_ids,
                     report_date__gte=month_start,
