@@ -5502,9 +5502,17 @@ def update_manual_campaign_kpis_in_sheets(
                 f'AX{manual_start}:AX{clear_end}',
             ])
 
-            campaigns_qs = ManualCampaign.objects.filter(store=store).exclude(
-                ozon_campaign_id__isnull=True
-            ).exclude(ozon_campaign_id='')
+            manual_active_states = {
+                ManualCampaign.CAMPAIGN_STATE_RUNNING,
+                ManualCampaign.CAMPAIGN_STATE_ACTIVE,
+                ManualCampaign.CAMPAIGN_STATE_PLANNED,
+            }
+
+            campaigns_qs = (
+                ManualCampaign.objects.filter(store=store, state__in=manual_active_states)
+                .exclude(ozon_campaign_id__isnull=True)
+                .exclude(ozon_campaign_id='')
+            )
             campaigns = list(campaigns_qs)
             if not campaigns:
                 logger.info(
@@ -5702,9 +5710,6 @@ def update_manual_campaign_kpis_in_sheets(
 
             eligible_campaigns = []
             for camp_id, data in campaign_data.items():
-                if data['adv_sales_units'] <= 0:
-                    continue
-
                 total_amount = Decimal('0')
                 total_units = 0
                 total_amount_7 = Decimal('0')
