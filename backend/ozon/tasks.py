@@ -17,7 +17,7 @@ from datetime import date as dt_date, timedelta
 from math import ceil
 from functools import reduce
 from operator import or_
-from django.db import models
+from django.db import models, transaction
 from datetime import datetime, date, timedelta
 import calendar
 import gspread
@@ -360,7 +360,7 @@ def _sync_fbs_stock_for_store(store):
             store=store,
             product_id=item.get("product_id"),
             sku=item.get("sku"),
-            fbs_sku=item.get("fbs_sku"),
+            fbs_sku=item.get("sku"),
             present=item.get("present", 0),
             reserved=item.get("reserved", 0),
             warehouse_id=item.get("warehouse_id"),
@@ -1058,7 +1058,7 @@ def fetch_campaign_objects_from_ozon(store: OzonStore, campaign_id: str) -> list
 # =========================
 # update_abc_sheet
 # =========================
-# Основная функция которая строит создает ABC отчет. 
+# Основная функция которая  создает ABC отчет. 
 # обновляет Google‑таблицу с ABC‑анализом и бюджетами. Считает общий рекламный бюджет 
 # как долю от выручки, при необходимости вычитает уже потраченное, 
 # распределяет недельный/дневной бюджет по товарам, 
@@ -1098,7 +1098,6 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
     # Читаем параметры из Main_ADV одним батч-запросом
     ws_main = sh.worksheet('Main_ADV')
     start_row = 13  # начало блока кампаний на листе
-    # Настройки сдвинулись на один столбец вправо: теперь колонка T (и U для max цены)
     param_cells = ['V13','V14','V15','V16','W16','V17','V21','V18','V19','V20', 'V22', 'V23','V24','V25','V26', 'V27']
     param_vals = ws_main.batch_get([f'{c}:{c}' for c in param_cells])
     cell_value = {}
@@ -1582,7 +1581,9 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
         ws_main.update('B5', [[_to_int(budget_total)]])
         ws_main.update('B6', [[_to_int(budget_total)]])
         ws_main.update('C6', [[_to_int(budget_total_ONE_WEEK_original)]])  # Недельный бюджет ДО корректировки
-        ws_main.update('D6', [[_to_int(budget_total_ONE_DAY)]])
+        # ws_main.update('D6', [[_to_int(budget_total_ONE_DAY)]])
+        ws_main.update('D6', [[_to_int(budget_total_ONE_WEEK_original / Decimal('7'))]])
+        
 
         ws_main.update('E4', [[datetime.now().strftime('%d/%m/%y')]])
         ws_main.update('E5', [[datetime.now().strftime('%d/%m/%y')]])        
@@ -1860,6 +1861,21 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
                 continue
             candidate = next((row for row in rows if str(row[0]).strip() == offer_id), None)
             if candidate:
+                # проверяем фильтр по остаткам, чтобы не нарушать логику FBS/FBO
+                sku_candidate = candidate[1]
+                if min_fbs_stock > 0 or min_fbo_stock > 0:
+                    fbs_candidate = fbs_by_sku.get(sku_candidate, 0)
+                    fbo_candidate = fbo_by_sku.get(sku_candidate, 0)
+                    if min_fbs_stock > 0 and fbs_candidate < min_fbs_stock:
+                        logger.info(
+                            f"[⚠️] Обязательный offer_id '{offer_id}' пропущен: FBS остаток {fbs_candidate} < {min_fbs_stock}"
+                        )
+                        continue
+                    if min_fbo_stock > 0 and fbo_candidate < min_fbo_stock:
+                        logger.info(
+                            f"[⚠️] Обязательный offer_id '{offer_id}' пропущен: FBO остаток {fbo_candidate} < {min_fbo_stock}"
+                        )
+                        continue
                 selected.append(candidate)
                 selected_offer_ids.add(offer_id)
                 mandatory_added += 1
@@ -1884,6 +1900,9 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
         #     logger.info(t_data)
         # Пропорциональное распределение по выбранным товарам:
         # Считаем общую выручку всех отобранных товаров (для пропорционального распределения)
+        if selected and mandatory_offer_ids_set:
+            selected.sort(key=lambda row: 0 if str(row[0]).strip() in mandatory_offer_ids_set else 1)
+
         selected_total_revenue = sum(Decimal(str(r[2])) for r in selected) if selected else Decimal('0')
         share_values = []  # Значения доли выручки для колонки AX
         out_rows = []  # Список строк для записи в таблицу
@@ -1891,6 +1910,7 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
         campaign_names = []  # Столбец C: «Артикул товара + дата создания»
         sum_week = Decimal('0')  # Сумма всех недельных бюджетов
         logger.info(f"selected_total_revenue = {selected_total_revenue}")
+        
         for r in selected:
             offer_or_name = r[0]  # Артикул или название товара
             sku = r[1]  # SKU товара
@@ -1921,9 +1941,14 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
                 week_amt = Decimal(str(min_budget)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
                 
             # Контроль суммы: если превышаем недельный бюджет — прекращаем и не добавляем текущий товар
-            if (sum_week + week_amt) > budget_total_ONE_WEEK+1:
-                logger.info("[⛔] Сумма недельных бюджетов превысила недельный бюджет, остановка подбора TOP-N")
-                break
+            if (sum_week + week_amt) > budget_total_ONE_WEEK + Decimal('1'):
+                if str(offer_or_name).strip() in mandatory_offer_ids_set:
+                    logger.info(
+                        f"[⚠️] Обязательный товар {offer_or_name} превышает недельный бюджет, включаем его сверх лимита"
+                    )
+                else:
+                    logger.info("[⛔] Сумма недельных бюджетов превысила недельный бюджет, остановка подбора TOP-N")
+                    break
             logger.info(f"sum_week = {sum_week} | week_amt = {week_amt} | share = {round(share*100,3)} | r = {r}")
 
             sum_week += week_amt  # Добавляем к общей сумме недельных бюджетов
@@ -2275,12 +2300,45 @@ def rebalance_auto_weekly_budgets(
         if today.weekday() != 0:  # 0 = понедельник
             logger.info(f"[ℹ️] Сегодня {today:%d.%m.%Y} (weekday={today.weekday()}), не понедельник — перерасчёт пропущен")
             return {"skipped": True, "reason": "not monday"}
+
+        if not spreadsheet_url:
+            stores_qs = (
+                OzonStore.objects.exclude(google_sheet_url__isnull=True)
+                .exclude(google_sheet_url='')
+            )
+            stores = list(stores_qs)
+            if not stores:
+                logger.info("[ℹ️] Нет магазинов с заполненным google_sheet_url для перерасчёта бюджетов")
+                return {"processed": 0, "results": [], "errors": []}
+
+            processed = 0
+            results: list[dict] = []
+            errors: list[dict] = []
+            for store in stores:
+                sheet_url = store.google_sheet_url
+                if not sheet_url:
+                    continue
+                processed += 1
+                result = rebalance_auto_weekly_budgets(
+                    spreadsheet_url=sheet_url,
+                    sa_json_path=sa_json_path,
+                    worksheet_name=worksheet_name,
+                    start_row=start_row,
+                )
+                if isinstance(result, dict) and result.get('error'):
+                    errors.append({"store_id": store.id, "error": result['error']})
+                    continue
+                success = result if isinstance(result, dict) else {"result": result}
+                success["store_id"] = store.id
+                results.append(success)
+
+            summary = {"processed": processed, "results": results}
+            if errors:
+                summary["errors"] = errors
+            return summary
+
         
-        
-        spreadsheet_url = spreadsheet_url or os.getenv(
-            "ABC_SPREADSHEET_URL",
-            "https://docs.google.com/spreadsheets/d/1-_XS6aRZbpeEPFDyxH3OV0IMbl_GUUEysl6ZJXoLmQQ",
-        )
+        spreadsheet_url = spreadsheet_url or ""
         sa_json_path = sa_json_path or os.getenv(
             "GOOGLE_SA_JSON_PATH",
             "/workspace/ozon-469708-c5f1eca77c02.json",
@@ -2348,6 +2406,7 @@ def rebalance_auto_weekly_budgets(
             ManualCampaign.CAMPAIGN_STATE_RUNNING,
             ManualCampaign.CAMPAIGN_STATE_ACTIVE,
             ManualCampaign.CAMPAIGN_STATE_PLANNED,
+            ManualCampaign.CAMPAIGN_STATE_STOPPED
         }
         manual_week_reserved = sum(
             Decimal(str(c.week_budget or 0))
@@ -2533,10 +2592,10 @@ def rebalance_auto_weekly_budgets(
 
         try:
             ws.update('C8', [[float(manual_week_reserved)]], value_input_option='USER_ENTERED')
-            ws.update('C6', [[float((available_month_budget / Decimal(days_left)) * Decimal(period_days))]], value_input_option='USER_ENTERED')
-            ws.update('D6', [[float((available_month_budget / Decimal(days_left)) * Decimal(1))]], value_input_option='USER_ENTERED')
+            ws.update('C7', [[float((available_month_budget / Decimal(days_left)) * Decimal(period_days))]], value_input_option='USER_ENTERED')
+            ws.update('D7', [[float((available_month_budget / Decimal(days_left)) * Decimal(1))]], value_input_option='USER_ENTERED')
 
-            ws.update('E6', [[datetime.now().strftime('%d/%m/%y')]])
+            ws.update('E7', [[datetime.now().strftime('%d/%m/%y')]])
 
         except Exception as c8_err:
             logger.warning(f"[⚠️] Не удалось обновить C8 недельным бюджетом ручных кампаний: {c8_err}")
@@ -2548,7 +2607,9 @@ def rebalance_auto_weekly_budgets(
             remaining_month_budget = Decimal('0')
         try:
             ws.update('B6', [[float(remaining_month_budget)]], value_input_option='USER_ENTERED')            
+            ws.update('B7', [[float(remaining_month_budget)]], value_input_option='USER_ENTERED')
             ws.update('B9', [[float(remaining_month_budget)]], value_input_option='USER_ENTERED')
+
         except Exception as b9_err:
             logger.warning(f"[⚠️] Не удалось обновить B9 остатком бюджета: {b9_err}")
 
@@ -2897,7 +2958,7 @@ def create_or_update_AD(spreadsheet_url: str = None, sa_json_path: str = None, w
         list: Массив строк с данными из таблицы
     """
     
-    spreadsheet_url = spreadsheet_url or "https://docs.google.com/spreadsheets/d/1-_XS6aRZbpeEPFDyxH3OV0IMbl_GUUEysl6ZJXoLmQQ"
+    spreadsheet_url = spreadsheet_url or ""
     sa_json_path = sa_json_path or "/workspace/ozon-469708-c5f1eca77c02.json"
     
     logger.info(f"[📖] Начинаем чтение данных из Google Sheets: {worksheet_name}, строка {start_row}")
@@ -3383,7 +3444,7 @@ def create_or_update_AD(spreadsheet_url: str = None, sa_json_path: str = None, w
 
 # 2. Проверяет ячейку K -Бюджет на нед, РУЧНОЙ
 # Если задан ручной бюджет, то проверяет в моделе был ли задан ручной бюджет ранее и если есть изменения, 
-# то обнавляет неделеный бюджет у РК в озоне
+# то обновляет неделеный бюджет у РК в озоне
 @shared_task(name="Синхронизация активности кампаний с Google Sheets")
 def sync_campaign_activity_with_sheets(
         spreadsheet_url: str = None,
@@ -3530,6 +3591,24 @@ def sync_campaign_activity_with_sheets(
                 except Exception:
                     return None
 
+        def _normalize_campaign_id(raw_value: str | None) -> str:
+            """
+            Приводит значение из таблицы к строке campaign_id без апострофов и служебных символов.
+            """
+            if raw_value is None:
+                return ''
+            s = str(raw_value).strip()
+            if not s:
+                return ''
+            # Удаляем служебный префикс, которым Google Sheets помечает текстовые числа
+            s = s.lstrip("'").lstrip("’").lstrip("`")
+            # Убираем пробелы и неразрывные пробелы внутри
+            s = s.replace('\u00A0', '').replace('\u202F', '').replace(' ', '')
+            # Если значение пришло как 17456100.0 — убираем дробную часть с нулями
+            if s.endswith('.0'):
+                s = s[:-2]
+            return s
+
         # Минимальные остатки из настроек
         min_fbs_stock = _parse_int_cell(ws.acell('V26').value)
         min_fbo_stock = _parse_int_cell(ws.acell('V27').value)
@@ -3646,6 +3725,7 @@ def sync_campaign_activity_with_sheets(
                     # Извлекаем данные из строки
                     campaign_id = str(row[0]).strip() if len(row) > 0 else ""
                     active_value = str(row[1]).strip() if len(row) > 1 else ""
+                    week_budget_value = str(row[9]).strip() if len(row) > 9 else ""      # Колонка J (индекс 9)
                     manual_budget_value = str(row[10]).strip() if len(row) > 10 else ""  # Колонка K (индекс 10)
                     sheet_day_budget_value = str(row[11]).strip() if len(row) > 11 else ""
                     
@@ -3735,7 +3815,11 @@ def sync_campaign_activity_with_sheets(
                             except Exception as save_err:
                                 logger.warning(f"[⚠️] Не удалось сбросить флаг низкого остатка для кампании {campaign_id}: {save_err}")
 
-                    
+                    # Значение недельного бюджета из колонки J (если заполнено)
+                    week_budget_decimal = _parse_decimal_cell(week_budget_value)
+                    week_budget_float = float(week_budget_decimal) if week_budget_decimal is not None else None
+                    week_budget_synced = False
+
                     # Проверяем изменения в ручном бюджете (колонка K)
                     if manual_budget_value:
                         try:
@@ -3768,8 +3852,10 @@ def sync_campaign_activity_with_sheets(
                                     )
                                     logger.info(f"[🌐] API Ozon: бюджет кампании {campaign_id} обновлен успешно")
 
-                                    ad_plan_item.manual_budget = manual_budget_float
-                                    ad_plan_item.week_budget = manual_budget_float
+                                    _update_campaign_from_ozon_response(ad_plan_item, budget_response)
+
+                                    ad_plan_item.manual_budget = manual_budget_decimal
+                                    ad_plan_item.week_budget = manual_budget_decimal
                                     ad_plan_item.day_budget = manual_day_int
                                     ad_plan_item.save(update_fields=['manual_budget', 'week_budget', 'day_budget'])
 
@@ -3787,25 +3873,50 @@ def sync_campaign_activity_with_sheets(
                         prev_manual = float(ad_plan_item.manual_budget or 0)
                         if prev_manual > 0:
                             try:
-                                auto_week_budget = float(ad_plan_item.week_budget or 0)
-                                logger.info(f"[↩️] Кампания {campaign_id}: ручной бюджет очищен в Sheets; возвращаем недельный бюджет к автоматическому = {auto_week_budget}")
-                                if auto_week_budget > 0:
-                                    update_campaign_budget(
+                                target_week_budget = week_budget_float if week_budget_float is not None else float(ad_plan_item.week_budget or 0)
+                                budget_source = "колонка J" if week_budget_float is not None else "модель"
+                                logger.info(f"[↩️] Кампания {campaign_id}: ручной бюджет очищен в Sheets; устанавливаем недельный бюджет = {target_week_budget} (источник: {budget_source})")
+                                if target_week_budget > 0:
+                                    response = update_campaign_budget(
                                         access_token=access_token,
                                         campaign_id=campaign_id,
-                                        weekly_budget_rub=auto_week_budget
+                                        weekly_budget_rub=target_week_budget
                                     )
+                                    logger.info(f"[🌐] API Ozon: недельный бюджет кампании {campaign_id} возвращен успешно")
+                                    _update_campaign_from_ozon_response(ad_plan_item, response)
+                                    week_budget_synced = week_budget_float is not None and abs(target_week_budget - week_budget_float) < 0.01
                                 # Сбрасываем ручной бюджет в БД и пересчитываем дневной по текущему недельному
                                 ad_plan_item.manual_budget = 0
                                 try:
                                     # Если week_budget хранится Decimal — безопасно делим
                                     ad_plan_item.day_budget = (ad_plan_item.week_budget or 0) / 7
                                 except Exception:
-                                    ad_plan_item.day_budget = auto_week_budget / 7
+                                    ad_plan_item.day_budget = target_week_budget / 7 if target_week_budget else 0
                                 ad_plan_item.save(update_fields=['manual_budget', 'day_budget'])
                                 budgets_updated += 1
                             except Exception as e:
                                 logger.error(f"[❌] Ошибка возврата на автоматический бюджет для кампании {campaign_id}: {e}")
+
+                    # Если ручной бюджет не используется и значение в колонке J изменилось — обновляем недельный бюджет
+                    if not manual_budget_value and week_budget_decimal is not None and week_budget_float is not None and not week_budget_synced:
+                        try:
+                            current_week_budget = float(ad_plan_item.week_budget or 0)
+                            if abs(week_budget_float - current_week_budget) > 0.01:
+                                if week_budget_float <= 0:
+                                    logger.warning(f"[⚠️] Кампания {campaign_id}: новое значение недельного бюджета <= 0 ({week_budget_float}) — обновление пропущено")
+                                else:
+                                    logger.info(f"[💵] Кампания {campaign_id}: обновление недельного бюджета {current_week_budget} -> {week_budget_float} по колонке J")
+                                    budget_response = update_campaign_budget(
+                                        access_token=access_token,
+                                        campaign_id=campaign_id,
+                                        weekly_budget_rub=week_budget_float
+                                    )
+                                    logger.info(f"[🌐] API Ozon: недельный бюджет кампании {campaign_id} обновлен успешно по колонке J")
+                                    _update_campaign_from_ozon_response(ad_plan_item, budget_response)
+                                    budgets_updated += 1
+                                    week_budget_synced = True
+                        except Exception as budget_error:
+                            logger.error(f"[❌] Ошибка обновления недельного бюджета кампании {campaign_id} по колонке J: {budget_error}")
                     
 #-------------------Прверяем, нужно ли отключить или заново вклчить компанию в ОЗОНЕ    
                 
@@ -3938,9 +4049,9 @@ def sync_campaign_activity_with_sheets(
                 col_a_values = []
 
             campaign_row_map = {
-                str(value).strip(): idx
+                norm_id: idx
                 for idx, value in enumerate(col_a_values, start=1)
-                if str(value).strip()
+                if (norm_id := _normalize_campaign_id(value))
             }
 
             # Читаем все кампании из базы данных для этого магазина
@@ -3958,7 +4069,7 @@ def sync_campaign_activity_with_sheets(
                     actual_status = _translate_auto_campaign_status(ad_plan_item.state)
                 
                 # Находим строку с этим campaign_id в таблице
-                row_idx = campaign_row_map.get(str(ad_plan_item.ozon_campaign_id).strip())
+                row_idx = campaign_row_map.get(_normalize_campaign_id(ad_plan_item.ozon_campaign_id))
                 if row_idx:
                     status_updates.append({
                         'range': f'C{row_idx}',
@@ -4005,7 +4116,6 @@ def sync_campaign_activity_with_sheets(
         return {"error": str(e)}
     
     
-
 
 
 # =============================
@@ -4076,10 +4186,7 @@ def toggle_store_ads_status(
         logger.info(f"[🔀] StoreAdControl для {store}: previous={previous} -> desired={desired} (mode={mode})")
 
         # Обновляем S3 (только статус системы; остальные данные листа не трогаем)
-        spreadsheet_url = spreadsheet_url or os.getenv(
-            "ABC_SPREADSHEET_URL",
-            "https://docs.google.com/spreadsheets/d/1-_XS6aRZbpeEPFDyxH3OV0IMbl_GUUEysl6ZJXoLmQQ",
-        )
+        spreadsheet_url = spreadsheet_url or ""
         sa_json_path = sa_json_path or os.getenv(
             "GOOGLE_SA_JSON_PATH",
             "/workspace/ozon-469708-c5f1eca77c02.json",
@@ -4427,6 +4534,198 @@ def fetch_performance_reports(max_reports: int = 50):
     return {"processed": processed, "ready": ready, "failed": failed}
 #-------------------------------------
 
+
+#Performance: прод — мгновенный дневной отчёт по всем кампаниям
+def fetch_daily_campaign_statistics(date_str: str, store_id: int | None = None):
+    """
+    Запрашивает дневной отчёт по всем кампаниям за указанную дату без предварительного формирования
+    и обновляет CampaignPerformanceReport/CampaignPerformanceReportEntry.
+    """
+    from .models import (
+        CampaignPerformanceReport,
+        CampaignPerformanceReportEntry,
+        AdPlanItem,
+        ManualCampaign,
+    )
+    from .utils import get_store_performance_token
+
+    try:
+        target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+    except Exception as e:
+        logger.error(f"[❌] Некорректная дата '{date_str}': {e}")
+        return {"processed": 0, "updated": 0, "errors": 1, "reason": "invalid date"}
+
+    stores_qs = OzonStore.objects.exclude(performance_client_id__isnull=True).exclude(performance_client_id='')
+    if store_id:
+        stores_qs = stores_qs.filter(id=store_id)
+
+    stores = list(stores_qs)
+    if not stores:
+        logger.info("[ℹ️] Нет магазинов с настройками Performance API для мгновенного отчёта")
+        return {"processed": 0, "updated": 0, "errors": 0, "reason": "no stores"}
+
+    url_base = "https://api-performance.ozon.ru:443/api/client/statistics/daily/json"
+    query = f"?dateFrom={target_date:%Y-%m-%d}&dateTo={target_date:%Y-%m-%d}"
+
+    processed = 0
+    updated_entries = 0
+    errors = 0
+    results: list[dict] = []
+
+    for store in stores:
+        processed += 1
+        manual_ids = set(
+            ManualCampaign.objects.filter(store=store)
+            .exclude(ozon_campaign_id__isnull=True)
+            .exclude(ozon_campaign_id='')
+            .values_list('ozon_campaign_id', flat=True)
+        )
+        auto_ids = set(
+            AdPlanItem.objects.filter(store=store)
+            .exclude(ozon_campaign_id__isnull=True)
+            .exclude(ozon_campaign_id='')
+            .values_list('ozon_campaign_id', flat=True)
+        )
+
+        try:
+            token_info = get_store_performance_token(store)
+            access_token = token_info.get('access_token')
+            if not access_token:
+                raise Exception('нет access_token')
+
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/json",
+            }
+            resp = requests.get(f"{url_base}{query}", headers=headers, timeout=30)
+
+            if resp.status_code in (401, 403):
+                token_info = get_store_performance_token(store)
+                access_token = token_info.get('access_token')
+                if not access_token:
+                    raise Exception('нет access_token после обновления')
+                headers["Authorization"] = f"Bearer {access_token}"
+                resp = requests.get(f"{url_base}{query}", headers=headers, timeout=30)
+
+            if resp.status_code != 200:
+                logger.error(
+                    f"[❌] daily/json {store}: {resp.status_code} {resp.text}"
+                )
+                errors += 1
+                results.append({"store_id": store.id, "status": resp.status_code})
+                continue
+
+            payload = resp.json() if resp.text else {}
+            rows = payload.get('rows') if isinstance(payload.get('rows'), list) else []
+            if not rows:
+                logger.info(
+                    f"[ℹ️] Магазин {store}: в daily/json за {target_date:%Y-%m-%d} нет данных"
+                )
+                results.append({"store_id": store.id, "status": "empty"})
+                continue
+
+            day_start = _make_aware(datetime.combine(target_date, datetime.min.time()))
+            day_end = _make_aware(datetime.combine(target_date, datetime.max.time()))
+
+            store_updates = 0
+            manual_found = 0
+            auto_found = 0
+            unknown_found = 0
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                campaign_id = str(row.get('id') or '').strip()
+                if not campaign_id:
+                    continue
+
+                totals_payload = dict(row)
+                rows_payload = [dict(row)]
+
+                report_uuid = f"daily-{store.id}-{campaign_id}-{target_date:%Y%m%d}"
+                report_defaults = {
+                    'status': CampaignPerformanceReport.STATUS_READY,
+                    'ready_at': timezone.now(),
+                    'last_checked_at': timezone.now(),
+                    'error_message': '',
+                    'raw_response': {
+                        'source': 'daily_json',
+                        'rows': rows_payload,
+                    },
+                    'totals': totals_payload,
+                    'rows': rows_payload,
+                    'request_payload': {
+                        'dateFrom': f"{target_date:%Y-%m-%d}",
+                        'dateTo': f"{target_date:%Y-%m-%d}",
+                        'source': 'daily_json',
+                    },
+                }
+
+                report_obj, created_report = CampaignPerformanceReport.objects.get_or_create(
+                    store=store,
+                    ozon_campaign_id=campaign_id,
+                    date_from=day_start,
+                    date_to=day_end,
+                    defaults={
+                        'report_uuid': report_uuid,
+                        **report_defaults,
+                    }
+                )
+                if not created_report:
+                    update_fields = []
+                    for field, value in report_defaults.items():
+                        current = getattr(report_obj, field, None)
+                        if current != value:
+                            setattr(report_obj, field, value)
+                            update_fields.append(field)
+                    if not report_obj.report_uuid:
+                        report_obj.report_uuid = report_uuid
+                        update_fields.append('report_uuid')
+                    if update_fields:
+                        report_obj.save(update_fields=update_fields)
+
+                entry_defaults = {
+                    'report': report_obj,
+                    'rows': rows_payload,
+                    'totals': totals_payload,
+                }
+                entry_obj, _ = CampaignPerformanceReportEntry.objects.update_or_create(
+                    store=store,
+                    ozon_campaign_id=campaign_id,
+                    report_date=target_date,
+                    defaults=entry_defaults,
+                )
+
+                store_updates += 1
+                updated_entries += 1
+
+                if campaign_id in manual_ids:
+                    manual_found += 1
+                elif campaign_id in auto_ids:
+                    auto_found += 1
+                else:
+                    unknown_found += 1
+
+            results.append(
+                {
+                    "store_id": store.id,
+                    "updated": store_updates,
+                    "manual": manual_found,
+                    "auto": auto_found,
+                    "unknown": unknown_found,
+                }
+            )
+        except Exception as e:
+            logger.error(f"[❌] Ошибка обработки daily/json для {store}: {e}")
+            errors += 1
+            results.append({"store_id": store.id, "error": str(e)})
+
+    return {
+        "processed": processed,
+        "updated": updated_entries,
+        "errors": errors,
+        "results": results,
+    }
+#-------------------------------------
 #--------Performance: прод — запросить отчёт по всем кампаниям на указанную дату---------------
 def submit_campaign_reports_for_day(
     date_str: str,
@@ -4611,70 +4910,70 @@ def submit_campaign_reports_for_day(
     return {"created": created, "errors": errors, "uuids": uuids}
 #-------------------------------------
 #--------Performance: прод — запросить отчёт по всем авто-кампаниям на указанную дату---------------
-@shared_task(name="Performance: прод — запросить дневной отчёт по всем авто-кампаниям")
-def submit_auto_reports_for_day(date_str: str, store_id: int | None = None, batch_size: int = 10, retry_interval_sec: int = 10):
-    """Обёртка для автоматических кампаний (AdPlanItem)."""
-    return submit_campaign_reports_for_day(
-        date_str,
-        store_id=store_id,
-        batch_size=batch_size,
-        retry_interval_sec=retry_interval_sec,
-        campaign_kind="auto",
-    )
+# @shared_task(name="Performance: прод — запросить дневной отчёт по всем авто-кампаниям")
+# def submit_auto_reports_for_day(date_str: str, store_id: int | None = None, batch_size: int = 10, retry_interval_sec: int = 10):
+#     """Обёртка для автоматических кампаний (AdPlanItem)."""
+#     return submit_campaign_reports_for_day(
+#         date_str,
+#         store_id=store_id,
+#         batch_size=batch_size,
+#         retry_interval_sec=retry_interval_sec,
+#         campaign_kind="auto",
+#     )
     
 
 
-@shared_task(name="Performance: прод — запросить дневной отчёт по ручным кампаниям")
-def submit_manual_reports_for_day(date_str: str, store_id: int | None = None, batch_size: int = 10, retry_interval_sec: int = 10):
-    """Обёртка для ручных кампаний (ManualCampaign)."""
-    return submit_campaign_reports_for_day(
-        date_str,
-        store_id=store_id,
-        batch_size=batch_size,
-        retry_interval_sec=retry_interval_sec,
-        campaign_kind="manual",
-    )
+# @shared_task(name="Performance: прод — запросить дневной отчёт по ручным кампаниям")
+# def submit_manual_reports_for_day(date_str: str, store_id: int | None = None, batch_size: int = 10, retry_interval_sec: int = 10):
+#     """Обёртка для ручных кампаний (ManualCampaign)."""
+#     return submit_campaign_reports_for_day(
+#         date_str,
+#         store_id=store_id,
+#         batch_size=batch_size,
+#         retry_interval_sec=retry_interval_sec,
+#         campaign_kind="manual",
+#     )
 #-------------------------------------
-#--------Performance: прод — обёртка на вчерашний день (все авто-кампании) запуск в 04:00 каждый день---------------
-@shared_task(name="Performance: — дневной отчёт за вчера (все авто-кампании) запуск в 04:00 каждый день")
-def submit_auto_reports_for_yesterday(store_id: int | None = None, batch_size: int = 10, retry_interval_sec: int = 10):    
+#--------Performance: — дневной отчёт за вчера по всем компаниям каждый день запуск в 01:00
+@shared_task(name="Performance: — дневной отчёт за вчера по всем компаниям каждый день запуск в 01:00")
+def submit_all_reports_for_yesterday(store_id: int | None = None, batch_size: int = 10, retry_interval_sec: int = 10):    
     """
-    Запрашивает отчёт за вчерашний день по всем автоматическим кампаниям (через submit_auto_reports_for_day).
+    Запрашивает отчёт за вчерашний день по всем  кампаниям .
     """
     date_str = (timezone.localdate() - timedelta(days=1)).strftime("%Y-%m-%d")
-    
-    submit_manual_reports_for_day(date_str, store_id=store_id, batch_size=batch_size, retry_interval_sec=retry_interval_sec)
-    submit_auto_reports_for_day(date_str, store_id=store_id, batch_size=batch_size, retry_interval_sec=retry_interval_sec)
+    fetch_daily_campaign_statistics(date_str)
+
 #-------------------------------------
 #--------Performance: прод — обёртка на вчерашний день (ручные кампании)---------------
-@shared_task(name="Performance: прод — дневной отчёт за вчера (ручные кампании)")
-def submit_manual_reports_for_yesterday(store_id: int | None = None, batch_size: int = 10, retry_interval_sec: int = 10):
-    """
-    Запрашивает отчёт за вчерашний день по всем ручным кампаниям (через submit_manual_reports_for_day).
-    """
-    date_str = (timezone.localdate() - timedelta(days=1)).strftime("%Y-%m-%d")
-    return submit_manual_reports_for_day(date_str, store_id=store_id, batch_size=batch_size, retry_interval_sec=retry_interval_sec)
+# @shared_task(name="Performance: прод — дневной отчёт за вчера (ручные кампании)")
+# def submit_manual_reports_for_yesterday(store_id: int | None = None, batch_size: int = 10, retry_interval_sec: int = 10):
+#     """
+#     Запрашивает отчёт за вчерашний день по всем ручным кампаниям (через submit_manual_reports_for_day).
+#     """
+#     date_str = (timezone.localdate() - timedelta(days=1)).strftime("%Y-%m-%d")
+#     return submit_manual_reports_for_day(date_str, store_id=store_id, batch_size=batch_size, retry_interval_sec=retry_interval_sec)
 #-------------------------------------
-#--------Performance: прод — обёртка на сегодня (все авто-кампании) запускаем раз в час---------------
-@shared_task(name="Performance: прод — дневной отчёт за сегодня (все авто-кампании) запускаем раз в час")
-def submit_auto_reports_for_today(store_id: int | None = None, batch_size: int = 10, retry_interval_sec: int = 10):
-    """
-    Запрашивает отчёт за текущий день по всем автоматическим кампаниям (через submit_auto_reports_for_day).
-    """
+
+#--------Performance: обёртка на сегодня (все кампании) запускаем раз в час---------------
+@shared_task(name="Performance: отчёт за сегодня по всем компаниям запускаем раз в час")
+def submit_all_reports_for_today():
+
     date_str = timezone.localdate().strftime("%Y-%m-%d")
-    submit_auto_reports_for_day(date_str, store_id=store_id, batch_size=batch_size, retry_interval_sec=retry_interval_sec)
-    fetch_performance_reports()
+    # submit_auto_reports_for_day(date_str, store_id=store_id, batch_size=batch_size, retry_interval_sec=retry_interval_sec)
+    # fetch_performance_reports()
+    fetch_daily_campaign_statistics(date_str)
     update_auto_campaign_kpis_in_sheets()
+    update_manual_campaign_kpis_in_sheets()
 #-------------------------------------
 #--------Performance: прод — обёртка на сегодня (ручные кампании)---------------
-@shared_task(name="Performance: прод — дневной отчёт за сегодня (ручные кампании)")
-def submit_manual_reports_for_today(store_id: int | None = None, batch_size: int = 10, retry_interval_sec: int = 10):
-    """
-    Запрашивает отчёт за текущий день по ручным кампаниям (через submit_manual_reports_for_day).
-    """
-    date_str = timezone.localdate().strftime("%Y-%m-%d")
-    submit_manual_reports_for_day(date_str, store_id=store_id, batch_size=batch_size, retry_interval_sec=retry_interval_sec)
-    fetch_performance_reports()
+# @shared_task(name="Performance: прод — дневной отчёт за сегодня (ручные кампании)")
+# def submit_manual_reports_for_today(store_id: int | None = None, batch_size: int = 10, retry_interval_sec: int = 10):
+#     """
+#     Запрашивает отчёт за текущий день по ручным кампаниям (через submit_manual_reports_for_day).
+#     """
+#     date_str = timezone.localdate().strftime("%Y-%m-%d")
+#     submit_manual_reports_for_day(date_str, store_id=store_id, batch_size=batch_size, retry_interval_sec=retry_interval_sec)
+#     fetch_performance_reports()
 #-------------------------------------
 
 
@@ -4872,7 +5171,7 @@ def update_auto_campaign_kpis_in_sheets(
             end_date = timezone.localdate()
             if kpi_period_days:
                 start_date = end_date - timedelta(days=kpi_period_days - 1)
-                logger.info(f"if kpi_period_days start_date = {start_date}")
+                # logger.info(f"if kpi_period_days start_date = {start_date}")
             else:
                 start_dt = ad.ozon_created_at or ad.created_at
                 # защитимся: если None, берём неделю назад
@@ -4922,15 +5221,22 @@ def update_auto_campaign_kpis_in_sheets(
             return drr, spend
 
         def _total_sales_since_creation(ad: AdPlanItem):
-            start_dt = ad.ozon_created_at or ad.created_at
+            end_date = timezone.localdate()
+            if kpi_period_days:
+                start_date = end_date - timedelta(days=kpi_period_days - 1)
+            else:
+                start_dt = ad.ozon_created_at or ad.created_at
+                if not start_dt:
+                    start_dt = timezone.now() - timedelta(days=7)
+                start_date = _to_local_date(start_dt)
 
-            if not start_dt:
-                start_dt = timezone.now() - timedelta(days=7)
-            start_dt = _day_start(start_dt)
+            start_dt = _day_start(start_date)
+            end_dt = _day_end(end_date)
             qs = Sale.objects.filter(
                 store=store,
                 sku=ad.sku,
                 date__gte=start_dt,
+                date__lte=end_dt,
             ).only('quantity', 'price')
             amount = Decimal('0')
             units = 0
@@ -5669,10 +5975,8 @@ def update_manual_campaign_kpis_in_sheets(
                     report_date__lte=today,
                 )
                 for entry in month_spend_entries.iterator():
-                    logger.info(entry)
                     totals = entry.totals or {}
                     manual_month_spend += _to_decimal(totals.get('moneySpent'))
-                    logger.info(f"manual_month_spend = {manual_month_spend}")
             except Exception as spend_err:
                 logger.warning(
                     f"[⚠️] Не удалось посчитать месячный расход ручных кампаний: {spend_err}"
