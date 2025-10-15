@@ -1,7 +1,18 @@
 from django.urls import path
-from .views import (SyncOzonProductView, SyncOzonCategoryTreeView, SyncOzonWarehouseStockView,SyncOzonSalesView,
-                    SyncFbsStockView, ProductAnalytics_V2_View, ProductAnalyticsByItemView, TriggerUpdateABCSheetView,
-                    CreateOrUpdateAdPlanView, TriggerSyncCampaignActivityOverrideView, ToggleStoreAdsStatusView)
+from .views import (
+    SyncOzonProductView,
+    SyncOzonCategoryTreeView,
+    SyncOzonWarehouseStockView,
+    SyncOzonSalesView,
+    SyncFbsStockView,
+    ProductAnalytics_V2_View,
+    ProductAnalyticsByItemView,
+    TriggerUpdateABCSheetView,
+    CreateOrUpdateAdPlanView,
+    TriggerSyncCampaignActivityOverrideView,
+    ToggleStoreAdsStatusView,
+    TriggerRebalanceAutoBudgetsView,
+)
 urlpatterns = [
     path('ozon/products/', SyncOzonProductView.as_view()),
     path('ozon/categories/sync/', SyncOzonCategoryTreeView.as_view()),
@@ -15,5 +26,6 @@ urlpatterns = [
     path("ozon/createorupdateads/", CreateOrUpdateAdPlanView.as_view()),
     path("ozon/campaigns/sync-override/", TriggerSyncCampaignActivityOverrideView.as_view()),
     path("ozon/ads/toggle/", ToggleStoreAdsStatusView.as_view()),
+    path("ozon/campaigns/rebalance-weekly/", TriggerRebalanceAutoBudgetsView.as_view()),
 
 ]

@@ -324,6 +324,7 @@ class AdPlanItem(models.Model):
     google_sheet_row = models.PositiveIntegerField(null=True, blank=True, verbose_name="Номер строки в Google таблице")
     is_active_in_sheets = models.BooleanField(default=False, verbose_name="Активна в Google Sheets (колонка B)")
     paused_due_to_low_stock = models.BooleanField(default=False, verbose_name="Отключена из-за низких остатков")
+    is_mandatory = models.BooleanField(default=False, verbose_name="Обязательная кампания")
 
     # Места под KPI кампании (по желанию заполним отдельным таском)
     adv_sales_amount = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)

@@ -11,7 +11,13 @@ from django.db.models import Sum, F, Count, Q
 from datetime import datetime, timedelta
 from django.utils import timezone
 from collections import defaultdict
-from .tasks import update_abc_sheet, create_or_update_AD, sync_campaign_activity_with_sheets, toggle_store_ads_status
+from .tasks import (
+    update_abc_sheet,
+    create_or_update_AD,
+    sync_campaign_activity_with_sheets,
+    toggle_store_ads_status,
+    rebalance_auto_weekly_budgets,
+)
 
 import logging
 # Наполянем модель товароми
@@ -925,8 +931,74 @@ class TriggerSyncCampaignActivityOverrideView(APIView):
                 "error": str(e)
             }, status=500)
 
+class TriggerRebalanceAutoBudgetsView(APIView):
+    """Ручной запуск перерасчёта недельных бюджетов авто-кампаний для конкретного магазина."""
 
+    def post(self, request):
+        store_name = (request.data.get("store_name") or "").strip()
+        sa_json_path = request.data.get("sa_json_path")
+        worksheet_name = request.data.get("worksheet_name", "Main_ADV")
+        start_row_raw = request.data.get("start_row", 13)
 
+        try:
+            start_row = int(start_row_raw)
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "start_row must be an integer"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not store_name:
+            return Response(
+                {"error": "store_name is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        store = (
+            OzonStore.objects.filter(name__iexact=store_name).first()
+            or OzonStore.objects.filter(client_id__iexact=store_name).first()
+            or OzonStore.objects.filter(name__icontains=store_name).first()
+            or OzonStore.objects.filter(client_id__icontains=store_name).first()
+        )
+        if not store:
+            return Response(
+                {"error": f"store '{store_name}' not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        spreadsheet_url = (store.google_sheet_url or "").strip()
+        if not spreadsheet_url:
+            return Response(
+                {"error": f"store '{store.name}' has no google_sheet_url configured"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            result = rebalance_auto_weekly_budgets(
+                spreadsheet_url=spreadsheet_url,
+                sa_json_path=sa_json_path,
+                worksheet_name=worksheet_name,
+                start_row=start_row,
+            )
+        except Exception as err:
+            logging.exception(
+                "[❌] Ошибка ручного перерасчёта недельных бюджетов",
+                exc_info=err,
+            )
+            return Response(
+                {"status": "error", "error": str(err)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        payload = result if isinstance(result, dict) else {"result": result}
+        payload.update(
+            {
+                "status": payload.get("status", "completed"),
+                "store_id": store.id,
+                "store_name": store.name,
+            }
+        )
+        return Response(payload, status=status.HTTP_200_OK)
 
 
 class CreateOrUpdateAdPlanView(APIView):

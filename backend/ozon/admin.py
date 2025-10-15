@@ -223,9 +223,9 @@ class ProductDailyAnalyticsAdmin(admin.ModelAdmin):
 class AdPlanItemAdmin(admin.ModelAdmin):
     list_display = (
         'id', 'store', 'sku', 'offer_id', 'week_budget', 'manual_budget', 'state_raw', 'payment_type', 'has_existing_campaign', 'is_active_in_sheets', 'abc_label',
-        'ozon_campaign_id', 'campaign_name', 'campaign_type', 'ozon_created_at', 'ozon_updated_at', 'created_at'
+        'ozon_campaign_id', 'campaign_name', 'is_mandatory', 'ozon_created_at', 'ozon_updated_at', 'created_at'
     )
-    list_filter = ('abc_label', 'store', 'campaign_type', 'state', 'payment_type', 'has_existing_campaign', 'is_active_in_sheets')
+    list_filter = ('abc_label', 'store', 'is_mandatory', 'state', 'payment_type', 'has_existing_campaign', 'is_active_in_sheets')
     search_fields = ('sku', 'offer_id', 'ozon_campaign_id', 'campaign_name', 'store__name')
     ordering = ('-created_at',)
     readonly_fields = ('created_at',)

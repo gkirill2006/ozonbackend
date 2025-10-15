@@ -9,6 +9,7 @@ from .models import (DeliveryCluster, DeliveryClusterItemAnalytics, DeliveryAnal
 from .utils import create_cpc_product_campaign, update_campaign_budget, activate_campaign, deactivate_campaign
 
 import json
+from collections import defaultdict
 import time
 from decimal import Decimal, ROUND_HALF_UP
 from django.db.models import Sum, F, ExpressionWrapper, DecimalField
@@ -1058,6 +1059,30 @@ def fetch_campaign_objects_from_ozon(store: OzonStore, campaign_id: str) -> list
 # =========================
 # update_abc_sheet
 # =========================
+# Общие вспомогательные функции для работы с настройками листа
+
+def _read_mandatory_offer_ids(ws, column_index: int = 29, start_row: int = 13) -> tuple[list[str], set[str]]:
+    """
+    Возвращает список и множество обязательных offer_id, прочитанных из указанного столбца.
+    Чтение прекращается при первом пустом значении после start_row.
+    """
+    mandatory_list: list[str] = []
+    mandatory_set: set[str] = set()
+    try:
+        raw_values = ws.col_values(column_index)
+    except Exception as err:
+        logger.error(f"[❌] Ошибка при чтении списка обязательных товаров из колонки {column_index}: {err}")
+        return mandatory_list, mandatory_set
+
+    for raw in raw_values[start_row - 1:]:
+        value = (raw or '').strip()
+        if not value:
+            break
+        if value not in mandatory_set:
+            mandatory_set.add(value)
+            mandatory_list.append(value)
+    return mandatory_list, mandatory_set
+
 # Основная функция которая  создает ABC отчет. 
 # обновляет Google‑таблицу с ABC‑анализом и бюджетами. Считает общий рекламный бюджет 
 # как долю от выручки, при необходимости вычитает уже потраченное, 
@@ -1312,7 +1337,8 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
     logger.info(f"[ℹ️] Обрабатываем {len(all_skus)} уникальных SKU для поиска кампаний")
     
     # Получаем ручные кампании по SKU
-    manual_campaigns_dict = {}
+    manual_campaigns_dict: dict[int, list[dict]] = defaultdict(list)
+    manual_campaign_entries_total = 0
     if all_skus:
         # Учитываем только запущенные и остановленные кампании
         active_states = [
@@ -1346,30 +1372,35 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
                 unique_campaigns.append(campaign)
         manual_campaigns = unique_campaigns
         
-        sku_added_count = 0
         for campaign in manual_campaigns:
             campaign_sku_count = 0
             # Добавляем основной SKU
             if campaign.sku:
-                manual_campaigns_dict[campaign.sku] = {
+                manual_campaigns_dict[campaign.sku].append({
                     'name': campaign.name,
                     'type': 'Ручное',  # Ручная
                     'ozon_updated_at': campaign.ozon_updated_at,
-                    'status': _translate_campaign_status(campaign.state, is_manual=True)
-                }
-                sku_added_count += 1
+                    'status': _translate_campaign_status(campaign.state, is_manual=True),
+                    'ozon_campaign_id': campaign.ozon_campaign_id or '',
+                    'store_id': campaign.store_id,
+                })
+                manual_campaign_entries_total += 1
+                campaign_sku_count += 1
             
             # Добавляем все SKU из sku_list
             if campaign.sku_list and isinstance(campaign.sku_list, list):
                 for sku_item in campaign.sku_list:
-                    if sku_item and sku_item not in manual_campaigns_dict:
-                        manual_campaigns_dict[sku_item] = {
+                    if sku_item:
+                        manual_campaigns_dict[sku_item].append({
                             'name': campaign.name,
                             'type': 'Ручное',  # Ручная
                             'ozon_updated_at': campaign.ozon_updated_at,
-                            'status': _translate_campaign_status(campaign.state, is_manual=True)
-                        }
-                        sku_added_count += 1
+                            'status': _translate_campaign_status(campaign.state, is_manual=True),
+                            'ozon_campaign_id': campaign.ozon_campaign_id or '',
+                            'store_id': campaign.store_id,
+                        })
+                        manual_campaign_entries_total += 1
+                        campaign_sku_count += 1
             
             # Логируем информацию о кампании
             campaign_sku_count = 1 if campaign.sku else 0
@@ -1378,9 +1409,13 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
             logger.info(f"[ℹ️] Кампания {campaign.name} (ID: {campaign.ozon_campaign_id}) содержит {campaign_sku_count} SKU")
     
     # Логируем количество найденных ручных кампаний
-    logger.info(f"[ℹ️] Найдено {len(manual_campaigns_dict)} SKU с ручными кампаниями для магазина {store} (добавлено {sku_added_count} SKU)")
+    logger.info(f"[ℹ️] Найдено {manual_campaign_entries_total} ручных кампаний по SKU для магазина {store} (уникальных SKU: {len(manual_campaigns_dict)})")
     if manual_campaigns_dict:
         logger.info(f"[ℹ️] SKU с ручными кампаниями: {list(manual_campaigns_dict.keys())[:10]}{'...' if len(manual_campaigns_dict) > 10 else ''}")
+
+    def _get_first_manual_campaign(sku):
+        entries = manual_campaigns_dict.get(sku)
+        return entries[0] if entries else {}
     
     # Получаем автоматические кампании по SKU (если ручных нет)
     auto_campaigns_dict = {}
@@ -1431,7 +1466,7 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
         if sku:
             # Проверяем сначала ручные кампании (приоритет)
             if sku in manual_campaigns_dict:
-                campaign_info = manual_campaigns_dict[sku]
+                campaign_info = _get_first_manual_campaign(sku)
                 campaign_name = campaign_info['name']
                 management_type = campaign_info['type']
                 campaign_status = campaign_info['status']
@@ -1551,7 +1586,7 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
         # T25: Учитывать бюджет ручных РК при создании (0 - не учитывать, 1 - учитывать)
         manual_budget_sum = Decimal('0')
         if consider_manual_budget == 1:
-            # Получаем суммарный недельный бюджет ручных кампаний со статусами RUNNING и STOPPED
+            # Получаем суммарный недельный бюджет ручных кампаний со статусами RUNNING
             manual_budget_sum = ManualCampaign.objects.filter(
                 store=store,
                 state__in=[
@@ -1688,6 +1723,7 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
     
     # Инициализируем список SKU с существующими ручными кампаниями
     existing_campaigns_rows = []
+    manual_rows_added: set[tuple[str, int]] = set()
     
     try:
         
@@ -1713,21 +1749,8 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
         logger.info(f"[ℹ️] Список исключений (offer_id) из Main_ADV!Y: {exclusion_offer_ids}")
 
         # Читаем список обязательных товаров из столбца AC (обязательные offer_id)
-        mandatory_offer_ids_list: list[str] = []
-        mandatory_offer_ids_set: set[str] = set()
-        try:
-            raw_mandatory = ws_main.col_values(29)[12:]  # AC13 и далее
-            for item in raw_mandatory:
-                item = (item or '').strip()
-                if not item:
-                    break  # останавливаемся при первом пустом значении
-                if item not in mandatory_offer_ids_set:
-                    mandatory_offer_ids_set.add(item)
-                    mandatory_offer_ids_list.append(item)
-        except Exception as e:
-            logger.error(f"[❌] Ошибка при чтении списка обязательных товаров из Main_ADV!Z: {e}")
-
-        logger.info(f"[ℹ️] Список обязательных offer_id из Main_ADV!Z: {mandatory_offer_ids_list}")
+        mandatory_offer_ids_list, mandatory_offer_ids_set = _read_mandatory_offer_ids(ws_main, column_index=29, start_row=13)
+        logger.info(f"[ℹ️] Список обязательных offer_id из Main_ADV!AC: {mandatory_offer_ids_list}")
         
         n_max = int((budget_total_ONE_WEEK // min_budget)) if min_budget > 0 else 0
         if 'max_items' in locals() and max_items and max_items > 0:
@@ -1822,27 +1845,30 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
                     continue
                 if has_manual_campaign:
                     logger.info(f"[ℹ️] SKU {sku} уже имеет рекламную кампанию, добавляем в список существующих")
-                    # Получаем информацию о кампании
-                    campaign_info = manual_campaigns_dict.get(sku, {})
-                    campaign_name = campaign_info.get('name', 'Неизвестная кампания')
-                    campaign_status = campaign_info.get('status', 'Неизвестный статус')
-                    
-                    # Добавляем в список существующих кампаний
-                    existing_campaigns_rows.append([
-                        campaign_name,    # A: ID кампании (название)
-                        '',               # B: Пустота для ручных кампаний
-                        campaign_status,  # C: Статус в Ozon
-                        offer_id,         # D: Артикул
-                        sku,              # E: SKU
-                        float(r[2]),      # F: Продажи, руб.
-                        r[3],             # G: Продажи, шт.
-                        float(r[4]),      # H: Цена товара, руб.
-                        r[5] if len(r) > 5 else '',  # I: ABC
-                        'Ручное',         # J: Тип управления
-                        '',               # K: Дата обновления (будет заполнена позже)
-                        campaign_status   # L: Статус кампании
-                    ])
-                    logger.info(f"[📋] Добавлен SKU {sku} с существующей кампанией '{campaign_name}' (статус: {campaign_status})")
+                    manual_entries = manual_campaigns_dict.get(sku, [])
+                    for manual_entry in manual_entries:
+                        campaign_name = manual_entry.get('name', 'Неизвестная кампания')
+                        campaign_status = manual_entry.get('status', 'Неизвестный статус')
+                        ozon_campaign_id = manual_entry.get('ozon_campaign_id') or campaign_name
+                        unique_key = (ozon_campaign_id, sku)
+                        if unique_key in manual_rows_added:
+                            continue
+                        manual_rows_added.add(unique_key)
+                        existing_campaigns_rows.append([
+                            ozon_campaign_id,  # A: ID кампании
+                            '',                # B: Пустота для ручных кампаний
+                            campaign_status,   # C: Статус в Ozon
+                            offer_id,          # D: Артикул
+                            sku,               # E: SKU
+                            float(r[2]),       # F: Продажи, руб.
+                            r[3],              # G: Продажи, шт.
+                            float(r[4]),       # H: Цена товара, руб.
+                            r[5] if len(r) > 5 else '',  # I: ABC
+                            'Ручное',          # J: Тип управления
+                            '',                # K: Дата обновления (будет заполнена позже)
+                            campaign_status    # L: Статус кампании
+                        ])
+                        logger.info(f"[📋] Добавлен SKU {sku} с существующей кампанией '{campaign_name}' (статус: {campaign_status})")
                     continue
                 
 
@@ -1956,8 +1982,9 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
             
             # Формируем название для колонки D:
             # Приоритет: ручная кампания -> автоматическая -> артикул + дата
-            if sku in manual_campaigns_dict and manual_campaigns_dict[sku].get('name'):
-                campaign_name_with_status = manual_campaigns_dict[sku]['name']
+            manual_campaign_entry = _get_first_manual_campaign(sku) if sku in manual_campaigns_dict else {}
+            if manual_campaign_entry.get('name'):
+                campaign_name_with_status = manual_campaign_entry['name']
             elif sku in auto_campaigns_dict and auto_campaigns_dict[sku].get('name'):
                 campaign_name_with_status = auto_campaigns_dict[sku]['name']
             else:
@@ -1993,6 +2020,23 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
             if isinstance(manual_week_budget, Decimal):
                 manual_week_budget = float(manual_week_budget)
 
+            meta_info = {}
+            if sku in manual_campaigns_dict:
+                meta_info = {
+                    'type': 'manual',
+                }
+            else:
+                auto_info = auto_campaigns_dict.get(sku, {})
+                status_val = auto_info.get('status', '')
+                is_enabled = 1 if status_val in ['Активна', 'Запущена'] else 0
+                meta_info = {
+                    'type': 'auto' if auto_info else 'auto_new',
+                    'campaign_id': auto_info.get('ozon_campaign_id', ''),
+                    'status': status_val,
+                    'name': auto_info.get('name', campaign_name_with_status),
+                    'is_enabled': is_enabled,
+                }
+
             out_rows.append([
                 product_name,  # F: Название товара (артикул)
                 int(sku),  # G: SKU товара
@@ -2000,7 +2044,7 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
                 manual_week_budget,  # I: Недельный бюджет ручной кампании
                 float(day_amt),  # J: Дневной бюджет (с 2 знаками после запятой)
             ])
-            items_to_save.append((int(sku), str(product_name), week_amt, day_amt))  # Сохраняем для записи в базу
+            items_to_save.append((int(sku), str(product_name), week_amt, day_amt, meta_info))  # Сохраняем для записи в базу
             share_output = share.quantize(Decimal('0.0001'), rounding=ROUND_HALF_UP) if selected_total_revenue > 0 else Decimal('0')
             share_values.append(float(share_output))
         
@@ -2021,7 +2065,7 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
             new_items_to_save = []
             new_sum_week = Decimal('0')
             
-            for i, (sku_i, offer_id_i, week_amt_i, day_amt_i) in enumerate(items_to_save):
+            for i, (sku_i, offer_id_i, week_amt_i, day_amt_i, meta_info) in enumerate(items_to_save):
                 # Пересчитываем недельный бюджет
                 new_week_amt = (week_amt_i * correction_factor).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
                 # Пересчитываем дневной бюджет
@@ -2039,7 +2083,7 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
                 ])
                 
                 # Обновляем данные для сохранения в БД
-                new_items_to_save.append((sku_i, offer_id_i, new_week_amt, new_day_amt))
+                new_items_to_save.append((sku_i, offer_id_i, new_week_amt, new_day_amt, meta_info))
             
             # Заменяем старые данные новыми
             out_rows = new_out_rows
@@ -2121,7 +2165,13 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
                 campaign_names.append([campaign_name_no_date])
                 
                 # Добавляем в items_to_save с нулевыми бюджетами
-                items_to_save.append((int(sku), product_name, Decimal('0'), Decimal('0')))
+                meta_info = {
+                    'type': 'manual',
+                    'campaign_id': campaign.ozon_campaign_id or '',
+                    'status': campaign_status,
+                    'name': campaign_name_no_date,
+                }
+                items_to_save.append((int(sku), product_name, Decimal('0'), Decimal('0'), meta_info))
                 share_values.append('')
 
                 existing_campaigns_added += 1
@@ -2145,32 +2195,21 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
             campaign_statuses_col_c = []
             campaign_types_col_e = []
             
-            for i, (sku_i, offer_id_i, week_amt_i, day_amt_i) in enumerate(items_to_save):
-                # Ищем кампанию, в которой находится этот SKU (включая sku_list)
-                manual_campaign = ManualCampaign.objects.filter(
-                    store=store,
-                    state__in=[
-                        'CAMPAIGN_STATE_RUNNING',
-                        'CAMPAIGN_STATE_STOPPED'
-                    ]
-                ).filter(
-                    models.Q(sku=sku_i) |  # Основной SKU
-                    models.Q(sku_list__contains=[sku_i])  # SKU в списке
-                ).first()
-                
-                if manual_campaign:
-                    # SKU унаследовал campaign_id от кампании
-                    campaign_id = manual_campaign.ozon_campaign_id
-                    campaign_status = _translate_campaign_status(manual_campaign.state)
+            for i, (sku_i, offer_id_i, week_amt_i, day_amt_i, meta_info) in enumerate(items_to_save):
+                entry_type = meta_info.get('type')
+                if entry_type == 'manual':
+                    campaign_id = meta_info.get('campaign_id', '')
+                    campaign_status = meta_info.get('status', '')
                     campaign_type = 'Ручная'
-                elif sku_i in auto_campaigns_dict:
-                    # Для автоматических кампаний
-                    campaign_info = auto_campaigns_dict.get(sku_i, {})
-                    campaign_id = campaign_info.get('ozon_campaign_id', '')
-                    campaign_status = campaign_info.get('status', '')
+                elif entry_type == 'auto':
+                    campaign_id = meta_info.get('campaign_id', '')
+                    campaign_status = meta_info.get('status', '')
+                    campaign_type = 'Авто'
+                elif entry_type == 'auto_new':
+                    campaign_id = meta_info.get('campaign_id', '')
+                    campaign_status = meta_info.get('status', '')
                     campaign_type = 'Авто'
                 else:
-                    # Для товаров без кампаний - пустые значения
                     campaign_id = ''
                     campaign_status = ''
                     campaign_type = ''
@@ -2185,20 +2224,13 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
             
             # Заполняем столбец B (активация): по умолчанию 1, для ручных - пустота, для автоматических - из модели
             activation_values = []
-            for i, (sku_i, offer_id_i, week_amt_i, day_amt_i) in enumerate(items_to_save):
-                # Проверяем, есть ли ручная кампания для этого SKU
-                if sku_i in manual_campaigns_dict:
-                    # Для ручных кампаний - пустота
+            for i, (sku_i, offer_id_i, week_amt_i, day_amt_i, meta_info) in enumerate(items_to_save):
+                entry_type = meta_info.get('type')
+                if entry_type == 'manual':
                     activation_values.append([''])
-                elif sku_i in auto_campaigns_dict:
-                    # Для автоматических кампаний - берем состояние из модели
-                    campaign_info = auto_campaigns_dict.get(sku_i, {})
-                    campaign_status = campaign_info.get('status', 'Неизвестный статус')
-                    # Кампания считается включенной, если статус 'Активна' или 'Запущена'
-                    is_enabled = 1 if campaign_status in ['Активна', 'Запущена'] else 0
-                    activation_values.append([is_enabled])
+                elif entry_type in ('auto', 'auto_new'):
+                    activation_values.append([meta_info.get('is_enabled', 1)])
                 else:
-                    # По умолчанию - 1
                     activation_values.append([1])
             
             if activation_values:
@@ -2218,8 +2250,8 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
             # Заполняем столбцы F-G (артикул и SKU), H (остаток FBS), I (остаток FBO) и J-L (бюджеты)
             cols_FG = [[row[0], row[1]] for row in out_rows]
             # Остатки по порядку items_to_save
-            fbs_col_H = [[int(fbs_by_sku.get(int(sku_i), 0))] for (sku_i, _offer, _w, _d) in items_to_save]
-            fbo_col_I = [[int(fbo_by_sku.get(int(sku_i), 0))] for (sku_i, _offer, _w, _d) in items_to_save]
+            fbs_col_H = [[int(fbs_by_sku.get(int(sku_i), 0))] for (sku_i, _offer, _w, _d, _meta) in items_to_save]
+            fbo_col_I = [[int(fbo_by_sku.get(int(sku_i), 0))] for (sku_i, _offer, _w, _d, _meta) in items_to_save]
             cols_JKL = [[row[2], row[3], row[4]] for row in out_rows]
             ws_main.update(f'F{start_row}:G{start_row + len(out_rows) - 1}', cols_FG)
             if fbs_col_H:
@@ -2284,6 +2316,65 @@ def update_abc_sheet_if_first_day(spreadsheet_url: str = None):
         return True
 
 #---------------- Перерасчёт недельных бюджетов авто-кампаний ------------------------
+
+@shared_task(name="Перерасчёт недельных бюджетов авто-кампаний по понедельникам")
+def scheduled_rebalance_auto_weekly_budgets_monday(
+    sa_json_path: str = None,
+    worksheet_name: str = "Main_ADV",
+    start_row: int = 13,
+):
+    """
+    Плановый запуск перерасчёта недельных бюджетов только по понедельникам.
+    Проходит по всем магазинам с настроенной таблицей и вызывает rebalance_auto_weekly_budgets.
+    """
+    today = timezone.localdate()
+    if today.weekday() != 0:  # 0 = понедельник
+        logger.info(f"[ℹ️] Сегодня {today:%d.%m.%Y} (weekday={today.weekday()}), не понедельник — перерасчёт пропущен")
+        return {"skipped": True, "reason": "not monday"}
+
+    stores_qs = (
+        OzonStore.objects.exclude(google_sheet_url__isnull=True)
+        .exclude(google_sheet_url='')
+    )
+    stores = list(stores_qs)
+    if not stores:
+        logger.info("[ℹ️] Нет магазинов с заполненным google_sheet_url для планового перерасчёта бюджетов")
+        return {"processed": 0, "results": [], "errors": []}
+
+    processed = 0
+    results: list[dict] = []
+    errors: list[dict] = []
+
+    for store in stores:
+        sheet_url = (store.google_sheet_url or '').strip()
+        if not sheet_url:
+            continue
+        processed += 1
+        try:
+            result = rebalance_auto_weekly_budgets(
+                spreadsheet_url=sheet_url,
+                sa_json_path=sa_json_path,
+                worksheet_name=worksheet_name,
+                start_row=start_row,
+            )
+        except Exception as err:
+            logger.error(f"[❌] Ошибка перерасчёта недельных бюджетов для магазина {store.id}: {err}")
+            errors.append({"store_id": store.id, "error": str(err)})
+            continue
+
+        if isinstance(result, dict) and result.get('error'):
+            errors.append({"store_id": store.id, "error": result['error']})
+            continue
+
+        success = result if isinstance(result, dict) else {"result": result}
+        success["store_id"] = store.id
+        results.append(success)
+
+    summary = {"processed": processed, "results": results}
+    if errors:
+        summary["errors"] = errors
+    return summary
+
 @shared_task(name="Перерасчёт недельных бюджетов авто-кампаний")
 def rebalance_auto_weekly_budgets(
     spreadsheet_url: str = None,
@@ -2297,45 +2388,9 @@ def rebalance_auto_weekly_budgets(
     """
     try:
         today = timezone.localdate()
-        if today.weekday() != 0:  # 0 = понедельник
-            logger.info(f"[ℹ️] Сегодня {today:%d.%m.%Y} (weekday={today.weekday()}), не понедельник — перерасчёт пропущен")
-            return {"skipped": True, "reason": "not monday"}
-
         if not spreadsheet_url:
-            stores_qs = (
-                OzonStore.objects.exclude(google_sheet_url__isnull=True)
-                .exclude(google_sheet_url='')
-            )
-            stores = list(stores_qs)
-            if not stores:
-                logger.info("[ℹ️] Нет магазинов с заполненным google_sheet_url для перерасчёта бюджетов")
-                return {"processed": 0, "results": [], "errors": []}
-
-            processed = 0
-            results: list[dict] = []
-            errors: list[dict] = []
-            for store in stores:
-                sheet_url = store.google_sheet_url
-                if not sheet_url:
-                    continue
-                processed += 1
-                result = rebalance_auto_weekly_budgets(
-                    spreadsheet_url=sheet_url,
-                    sa_json_path=sa_json_path,
-                    worksheet_name=worksheet_name,
-                    start_row=start_row,
-                )
-                if isinstance(result, dict) and result.get('error'):
-                    errors.append({"store_id": store.id, "error": result['error']})
-                    continue
-                success = result if isinstance(result, dict) else {"result": result}
-                success["store_id"] = store.id
-                results.append(success)
-
-            summary = {"processed": processed, "results": results}
-            if errors:
-                summary["errors"] = errors
-            return summary
+            logger.error("[❌] Не указан spreadsheet_url для перерасчёта недельных бюджетов")
+            return {"error": "spreadsheet_url not provided"}
 
         
         spreadsheet_url = spreadsheet_url or ""
@@ -2399,6 +2454,12 @@ def rebalance_auto_weekly_budgets(
         min_budget = _parse_decimal(ws.acell('V22').value)
         min_budget = max(min_budget, Decimal('0'))
 
+        mandatory_offer_ids_list, mandatory_offer_ids_set = _read_mandatory_offer_ids(ws, column_index=29, start_row=start_row)
+        if mandatory_offer_ids_list:
+            logger.info(f"[ℹ️] Обязательные offer_id для перерасчёта: {mandatory_offer_ids_list}")
+        else:
+            logger.info("[ℹ️] Обязательные offer_id для перерасчёта не заданы")
+
         manual_campaigns = list(
             ManualCampaign.objects.filter(store=store).exclude(ozon_campaign_id__isnull=True).exclude(ozon_campaign_id='')
         )
@@ -2419,6 +2480,12 @@ def rebalance_auto_weekly_budgets(
             AdPlanItem.objects.filter(store=store).exclude(ozon_campaign_id__isnull=True).exclude(ozon_campaign_id='')
         )
         auto_campaign_ids = [str(item.ozon_campaign_id) for item in auto_items]
+        ad_items_by_campaign = {
+            str(item.ozon_campaign_id): item for item in auto_items if item.ozon_campaign_id
+        }
+        ad_items_by_offer = {
+            (item.offer_id or '').strip(): item for item in auto_items if (item.offer_id or '').strip()
+        }
 
         def _sum_spend(campaign_ids: list[str]) -> Decimal:
             if not campaign_ids:
@@ -2452,50 +2519,210 @@ def rebalance_auto_weekly_budgets(
         weekly_pool = (available_month_budget / Decimal(days_left)) * Decimal(period_days) - manual_week_reserved if days_left else Decimal('0')
         weekly_pool = max(weekly_pool, Decimal('0'))
 
-        col_e = ws.col_values(5)
-        col_a = ws.col_values(1)
-        total_rows = len(col_a)
-        manual_start = None
-        for idx in range(start_row, len(col_e) + 1):
-            if str(col_e[idx - 1]).strip().lower().startswith('руч'):
-                manual_start = idx
-                break
-        auto_end = manual_start - 1 if manual_start else total_rows
-        if auto_end < start_row:
-            logger.info("[ℹ️] На листе нет автоматических кампаний для перерасчёта")
-            return {"skipped": True, "reason": "no auto rows"}
-
-        auto_rows_values = ws.get(f'A{start_row}:AX{auto_end}')
-
         campaign_type_index = 4  # колонка E
-        share_index = 49  # колонка AX
+        offer_id_index = 5       # колонка F
+        sku_index = 6            # колонка G
+        share_index = 49         # колонка AX
 
-        auto_rows = []
-        for i, row in enumerate(auto_rows_values):
-            row_number = start_row + i
-            if not row or len(row) == 0:
-                continue
-            campaign_id = str(row[0]).strip() if len(row) > 0 else ''
-            if not campaign_id:
-                continue
-            campaign_type = str(row[campaign_type_index]).strip().lower() if len(row) > campaign_type_index else ''
-            if campaign_type.startswith('руч'):
-                continue
-            share_raw = row[share_index] if len(row) > share_index else (row[-1] if row else '')
-            share_value = _parse_decimal(share_raw)
-            if share_value < 0:
-                share_value = Decimal('0')
-            auto_rows.append({
-                'row_number': row_number,
-                'campaign_id': campaign_id,
-                'share': share_value,
-            })
+        auto_rows: list[dict] = []
+        ozon_access_token: str | None = None
 
-        if not auto_rows:
-            logger.info("[ℹ️] Автоматических кампаний для перерасчёта не найдено")
-            return {"skipped": True, "reason": "no auto campaigns"}
+        while True:
+            col_e = ws.col_values(5)
+            col_a = ws.col_values(1)
+            total_rows = len(col_a)
+            manual_start = None
+            for idx in range(start_row, len(col_e) + 1):
+                if str(col_e[idx - 1]).strip().lower().startswith('руч'):
+                    manual_start = idx
+                    break
+            auto_end = manual_start - 1 if manual_start else total_rows
+            if auto_end < start_row:
+                logger.info("[ℹ️] На листе нет автоматических кампаний для перерасчёта")
+                return {"skipped": True, "reason": "no auto rows"}
 
-        share_sum = sum(row['share'] for row in auto_rows)
+            auto_rows_values = ws.get(f'A{start_row}:AX{auto_end}')
+
+            auto_rows = []
+            auto_offer_ids_in_sheet: set[str] = set()
+            empty_auto_rows: list[int] = []
+            for i, row in enumerate(auto_rows_values):
+                row_number = start_row + i
+                row_values = row[:] if row else []
+                if len(row_values) <= share_index:
+                    row_values += [''] * (share_index + 1 - len(row_values))
+
+                has_data = any(str(cell).strip() for cell in row_values)
+                if not has_data:
+                    empty_auto_rows.append(row_number)
+                    continue
+
+                campaign_id_raw = str(row_values[0]).strip() if len(row_values) > 0 else ''
+                campaign_type = str(row_values[campaign_type_index]).strip().lower() if len(row_values) > campaign_type_index else ''
+                if campaign_type.startswith('руч'):
+                    empty_auto_rows.append(row_number)
+                    continue
+
+                offer_id_cell = str(row_values[offer_id_index]).strip() if len(row_values) > offer_id_index else ''
+                fallback_offer_id = ''
+                if campaign_id_raw and campaign_id_raw in ad_items_by_campaign and not offer_id_cell:
+                    fallback_offer_id = (ad_items_by_campaign[campaign_id_raw].offer_id or '').strip()
+
+                offer_id_effective = offer_id_cell or fallback_offer_id
+                if offer_id_cell:
+                    auto_offer_ids_in_sheet.add(offer_id_cell)
+                if fallback_offer_id:
+                    auto_offer_ids_in_sheet.add(fallback_offer_id)
+
+                share_raw = row_values[share_index] if len(row_values) > share_index else ''
+                share_value = _parse_decimal(share_raw)
+                if share_value < 0:
+                    share_value = Decimal('0')
+
+                if campaign_id_raw:
+                    key = campaign_id_raw
+                elif offer_id_effective:
+                    key = f"MANDATORY::{offer_id_effective}"
+                else:
+                    key = f"MANDATORY::ROW{row_number}"
+
+                auto_rows.append({
+                    'row_number': row_number,
+                    'campaign_id': campaign_id_raw,
+                    'key': key,
+                    'share': share_value,
+                    'offer_id': offer_id_effective,
+                    'sku': str(row_values[sku_index]).strip() if len(row_values) > sku_index else '',
+                    'row_values': row_values,
+                })
+
+            if not auto_rows:
+                logger.info("[ℹ️] Автоматических кампаний для перерасчёта не найдено")
+                return {"skipped": True, "reason": "no auto campaigns"}
+
+            # 1) Удаляем кампании, которые больше не являются обязательными
+            rows_to_delete: list[int] = []
+            removal_entries: list[tuple[dict, AdPlanItem]] = []
+            for row in auto_rows:
+                campaign_id = row['campaign_id']
+                if not campaign_id:
+                    continue
+                ad_item = ad_items_by_campaign.get(campaign_id)
+                if not ad_item or not ad_item.is_mandatory:
+                    continue
+                offer_id_cell = (row.get('offer_id') or '').strip()
+                if not offer_id_cell:
+                    offer_id_cell = (ad_item.offer_id or '').strip()
+                if offer_id_cell in mandatory_offer_ids_set:
+                    continue
+                removal_entries.append((row, ad_item))
+                rows_to_delete.append(row['row_number'])
+
+            if removal_entries:
+                if ozon_access_token is None:
+                    try:
+                        from .utils import get_store_performance_token  # локальный импорт, чтобы не тянуть токен без надобности
+                        token_info = get_store_performance_token(store)
+                        ozon_access_token = token_info.get("access_token")
+                        if not ozon_access_token:
+                            logger.error(f"[❌] Не удалось получить access_token для деактивации кампаний магазина {store}")
+                    except Exception as token_err:
+                        logger.error(f"[❌] Ошибка получения access_token для деактивации кампаний магазина {store}: {token_err}")
+                        ozon_access_token = None
+
+                for row, ad_item in removal_entries:
+                    campaign_id = ad_item.ozon_campaign_id
+                    if ozon_access_token:
+                        try:
+                            deactivate_campaign(access_token=ozon_access_token, campaign_id=campaign_id)
+                            logger.info(f"[🛑] Кампания {campaign_id} деактивирована в Ozon (убрана из обязательных)")
+                        except Exception as deactivate_err:
+                            logger.error(f"[❌] Не удалось деактивировать кампанию {campaign_id} в Ozon: {deactivate_err}")
+                    ad_item.is_mandatory = False
+                    ad_item.is_active_in_sheets = False
+                    ad_item.google_sheet_row = None
+                    try:
+                        ad_item.save(update_fields=['is_mandatory', 'is_active_in_sheets', 'google_sheet_row'])
+                    except Exception as save_err:
+                        logger.warning(f"[⚠️] Не удалось обновить флаги кампании {campaign_id} после удаления: {save_err}")
+
+                for row_num in sorted(rows_to_delete, reverse=True):
+                    try:
+                        ws.delete_rows(row_num)
+                        logger.info(f"[🗑️] Строка {row_num} удалена с листа Main_ADV (кампания больше не обязательна)")
+                    except Exception as delete_err:
+                        logger.error(f"[❌] Не удалось удалить строку {row_num} из Main_ADV: {delete_err}")
+
+                # После удаления строк перечитываем лист
+                continue
+
+            # 2) Добавляем обязательные кампании, отсутствующие в списке
+            rows_to_append: list[list] = []
+            appended_offers: list[str] = []
+            for offer_id in mandatory_offer_ids_list:
+                if not offer_id or offer_id in auto_offer_ids_in_sheet:
+                    continue
+                item = ad_items_by_offer.get(offer_id)
+                sku_value = item.sku if item and item.sku else None
+                campaign_name_value = (item.campaign_name or item.name) if item else None
+                if not sku_value:
+                    product = Product.objects.filter(store=store, offer_id__iexact=offer_id).first()
+                    if product:
+                        sku_value = product.sku
+                        if not campaign_name_value:
+                            campaign_name_value = product.name or f"Auto {offer_id}"
+                if not sku_value:
+                    logger.warning(f"[⚠️] Не удалось определить SKU для обязательного offer_id '{offer_id}', строка не добавлена")
+                    continue
+                if item and not item.is_mandatory:
+                    item.is_mandatory = True
+                    try:
+                        item.save(update_fields=['is_mandatory'])
+                    except Exception as save_err:
+                        logger.warning(f"[⚠️] Не удалось установить флаг is_mandatory для кампании {item.ozon_campaign_id}: {save_err}")
+                sku_str = str(int(sku_value)) if str(sku_value).isdigit() else str(sku_value)
+                week_budget_str = str(float(min_budget)) if min_budget and min_budget > 0 else '0'
+                row_values = [
+                    '',
+                    '1',
+                    '',
+                    campaign_name_value or f"Auto {offer_id}",
+                    'Авто',
+                    offer_id,
+                    sku_str,
+                    '',
+                    '',
+                    week_budget_str,
+                    '',
+                    '',
+                    '',
+                    '',
+                    '',
+                    '',
+                    '',
+                    '',
+                    '',
+                ]
+                rows_to_append.append(row_values)
+                appended_offers.append(offer_id)
+
+            if rows_to_append:
+                for offer_id, row_values in zip(appended_offers, rows_to_append):
+                    auto_offer_ids_in_sheet.add(offer_id)
+                    new_dict = {
+                        'row_number': auto_end + len(auto_rows) + 1,
+                        'campaign_id': '',
+                        'key': f"MANDATORY::{offer_id}",
+                        'share': Decimal('0'),
+                        'offer_id': offer_id,
+                        'sku': row_values[6],
+                        'row_values': row_values,
+                    }
+                    auto_rows.append(new_dict)
+
+            break
+
+        share_sum = sum((row['share'] for row in auto_rows if row['share'] > 0), Decimal('0'))
         share_sum = share_sum if share_sum > 0 else Decimal('0')
 
         if weekly_pool <= 0:
@@ -2506,10 +2733,14 @@ def rebalance_auto_weekly_budgets(
         # === Шаг 1. Первичный расчёт ===
         new_budgets: dict[str, Decimal] = {}
         for row in auto_rows:
+            row_key = row['key']
             if weekly_pool <= 0:
                 week_amount = Decimal('0')
-            elif share_sum > 0 and row['share'] > 0:
-                week_amount = weekly_pool * (row['share'] / share_sum)
+            elif share_sum > 0:
+                if row['share'] > 0:
+                    week_amount = weekly_pool * (row['share'] / share_sum)
+                else:
+                    week_amount = Decimal('0')
             else:
                 week_amount = per_campaign_equal
 
@@ -2518,7 +2749,7 @@ def rebalance_auto_weekly_budgets(
                 week_amount = max(week_amount, min_budget)
 
             week_amount = week_amount.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-            new_budgets[row['campaign_id']] = week_amount
+            new_budgets[row_key] = week_amount
 
         # === Шаг 2. Проверяем общий лимит ===
         total_assigned = sum(new_budgets.values())
@@ -2545,43 +2776,98 @@ def rebalance_auto_weekly_budgets(
                         new_budgets[cid] = (new_budgets[cid] * scale).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
         # === Итоговое выравнивание (минимальная погрешность) ===
-        total_assigned = sum(new_budgets.values())
+        def _recalc_total() -> Decimal:
+            return sum(new_budgets.values(), Decimal('0'))
+
+        total_assigned = _recalc_total()
         diff = weekly_pool - total_assigned
         if abs(diff) >= Decimal('0.01'):
-            # Корректируем первую кампанию на разницу (чтобы сумма совпала)
-            first_key = next(iter(new_budgets))
-            new_budgets[first_key] += diff
-            new_budgets[first_key] = new_budgets[first_key].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            if diff < 0:
+                # Нужно уменьшить сумму: прежде всего пробуем скорректировать значения выше минимума
+                adjustable_keys = [key for key, val in new_budgets.items() if val > min_budget]
+                reducible = sum((new_budgets[key] - min_budget) for key in adjustable_keys)
+                need = abs(diff)
+                if reducible > Decimal('0') and need <= reducible + Decimal('0.005'):
+                    if reducible > Decimal('0'):
+                        scale = (reducible - need) / reducible if reducible else Decimal('0')
+                        for key in adjustable_keys:
+                            excess = new_budgets[key] - min_budget
+                            new_value = min_budget + (excess * scale)
+                            new_budgets[key] = new_value.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                else:
+                    scale = (weekly_pool / total_assigned) if total_assigned > 0 else Decimal('0')
+                    for key in new_budgets:
+                        new_budgets[key] = (new_budgets[key] * scale).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            else:
+                # Нужно добавить бюджет — просто докидываем к первой кампании
+                first_key = next(iter(new_budgets))
+                new_budgets[first_key] = (new_budgets[first_key] + diff).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
-
-
-
+            total_assigned = _recalc_total()
+            tail_diff = weekly_pool - total_assigned
+            if abs(tail_diff) >= Decimal('0.01'):
+                first_key = next(iter(new_budgets))
+                new_value = new_budgets[first_key] + tail_diff
+                if new_value < min_budget:
+                    new_value = min_budget
+                new_budgets[first_key] = new_value.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
         auto_map = {str(item.ozon_campaign_id): item for item in auto_items}
-        batch_updates = []
         updated_count = 0
+        new_rows_as: list[list] = []
+        debug_budget_rows: list[tuple[str, float]] = []
 
-        for row in auto_rows:
+        for idx, row in enumerate(auto_rows):
+            key = row['key']
             cid = row['campaign_id']
-            week_amount = new_budgets.get(cid, Decimal('0'))
+            week_amount = new_budgets.get(key, Decimal('0'))
             day_amount = (week_amount / Decimal('7')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-            batch_updates.append({
-                'range': f'J{row["row_number"]}:J{row["row_number"]}',
-                'values': [[float(week_amount)]]
-            })
-            ad_item = auto_map.get(cid)
-            if ad_item:
-                ad_item.week_budget = float(week_amount)
-                ad_item.day_budget = float(day_amount)
-                try:
-                    ad_item.save(update_fields=['week_budget', 'day_budget'])
-                except Exception as save_err:
-                    logger.warning(f"[⚠️] Не удалось сохранить бюджеты для кампании {cid}: {save_err}")
+
+            row_values = row['row_values']
+            if len(row_values) <= share_index:
+                row_values += [''] * (share_index + 1 - len(row_values))
+            row_values[9] = float(week_amount)
+            row_values[11] = float(day_amount)
+
+            new_rows_as.append(row_values[:19])
+            debug_budget_rows.append((cid or row['offer_id'], float(week_amount)))
+
+            new_row_number = start_row + idx
+
+            if cid:
+                ad_item = auto_map.get(cid)
+                if ad_item:
+                    ad_item.week_budget = float(week_amount)
+                    ad_item.day_budget = float(day_amount)
+                    save_fields = ['week_budget', 'day_budget']
+                    if ad_item.google_sheet_row != new_row_number:
+                        ad_item.google_sheet_row = new_row_number
+                        save_fields.append('google_sheet_row')
+                    try:
+                        ad_item.save(update_fields=save_fields)
+                    except Exception as save_err:
+                        logger.warning(f"[⚠️] Не удалось сохранить бюджеты для кампании {cid}: {save_err}")
             updated_count += 1
 
-        if batch_updates:
-            logger.info(f"{batch_updates}")
-            ws.batch_update(batch_updates, value_input_option='USER_ENTERED')
+        new_end_row = start_row + len(new_rows_as) - 1
+        try:
+            ws.batch_clear([f'A{start_row}:S{auto_end}'])
+        except Exception as clear_err:
+            logger.warning(f"[⚠️] Не удалось очистить диапазон авто-кампаний: {clear_err}")
+
+        if new_rows_as:
+            try:
+                ws.update(f'A{start_row}:S{new_end_row}', new_rows_as, value_input_option='USER_ENTERED')
+            except Exception as write_err:
+                logger.error(f"[❌] Ошибка при записи обновлённого блока авто-кампаний: {write_err}")
+        if debug_budget_rows:
+            sum_budget = sum(budget for _, budget in debug_budget_rows)
+            logger.info("[🧮] Новые недельные бюджеты авто-кампаний:")
+            for cid, budget in debug_budget_rows:
+                logger.info(f"    - {cid}: {budget}")
+            logger.info(f"[🧾] Сумма новых недельных бюджетов: {sum_budget}")
+
+        logger.debug(f"[📊] Итоговая сумма недельных бюджетов: {float(total_assigned)} (пул: {float(weekly_pool)})")
 
         logger.info(
             f"[✅] Перерасчёт бюджетов завершён. Авто кампаний: {len(auto_rows)}."
@@ -2606,24 +2892,36 @@ def rebalance_auto_weekly_budgets(
         if remaining_month_budget < 0:
             remaining_month_budget = Decimal('0')
         try:
-            ws.update('B6', [[float(remaining_month_budget)]], value_input_option='USER_ENTERED')            
             ws.update('B7', [[float(remaining_month_budget)]], value_input_option='USER_ENTERED')
             ws.update('B9', [[float(remaining_month_budget)]], value_input_option='USER_ENTERED')
 
         except Exception as b9_err:
             logger.warning(f"[⚠️] Не удалось обновить B9 остатком бюджета: {b9_err}")
 
-        return {
+        result_payload = {
             "updated": updated_count,
             "weekly_pool": float(weekly_pool),
             "manual_reserved": float(manual_week_reserved),
             "spent_auto": float(total_spent_auto),
             "spent_manual": float(total_spent_manual),
         }
+        try:
+            logger.info("[🔁] Запускаем create_or_update_AD после перерасчёта бюджетов")
+            create_or_update_AD(
+                spreadsheet_url=spreadsheet_url,
+                sa_json_path=sa_json_path,
+                worksheet_name=worksheet_name,
+                start_row=start_row,
+            )
+        except Exception as update_err:
+            logger.error(f"[❌] Ошибка при запуске create_or_update_AD после перерасчёта: {update_err}")
+
+        return result_payload
 
     except Exception as e:
         logger.error(f"[❌] Ошибка перерасчёта недельных бюджетов авто-кампаний: {e}")
         return {"error": str(e)}
+
 
 
 # =========================
@@ -3118,6 +3416,13 @@ def create_or_update_AD(spreadsheet_url: str = None, sa_json_path: str = None, w
             logger.error(f"[❌] Ошибка при получении настроек из Google Sheets: {e}")
             return data_rows
         
+        # Список обязательных offer_id из листа Main_ADV
+        mandatory_offer_ids_list, mandatory_offer_ids_set = _read_mandatory_offer_ids(ws, column_index=29, start_row=13)
+        if mandatory_offer_ids_list:
+            logger.info(f"[ℹ️] Обязательные offer_id на листе: {mandatory_offer_ids_list}")
+        else:
+            logger.info("[ℹ️] На листе нет обязательных offer_id")
+
         # Получаем токен один раз для всех операций
         from .utils import get_store_performance_token
         try:
@@ -3154,6 +3459,7 @@ def create_or_update_AD(spreadsheet_url: str = None, sa_json_path: str = None, w
                 # campaign_id пустое - создаем рекламу в Ozon
                 try:
                     sku = str(ad_data['sku']).strip()
+                    offer_id = str(ad_data['article']).strip()
                     campaign_name = str(ad_data['campaign_name']).strip()
                     week_budget = ad_data['week_budget']
                     manual_week_budget = ad_data['manual_week_budget']
@@ -3207,7 +3513,16 @@ def create_or_update_AD(spreadsheet_url: str = None, sa_json_path: str = None, w
                             row_number = ad_data['row_number']
                             cell_a = f'A{row_number}'
                             ws.update(cell_a, [[campaign_id]])
+                            try:
+                                format_cell_ranges(ws, [(cell_a, CellFormat(horizontalAlignment='RIGHT'))])
+                            except Exception as fmt_err:
+                                logger.warning(f"[⚠️] Не удалось выровнять ячейку {cell_a} по правому краю: {fmt_err}")
                             logger.info(f"[✅] Кампания создана для SKU {sku}: ID {campaign_id}, записано в ячейку {cell_a}")
+                            status_text = "Активна" if active == '1' else "Неактивна"
+                            try:
+                                ws.update(f'C{row_number}', [[status_text]])
+                            except Exception as status_err:
+                                logger.warning(f"[⚠️] Не удалось записать статус в C{row_number}: {status_err}")
                             # Проставляем тип кампании в колонке E — 'Авто'
                             try:
                                 ws.update(f'E{row_number}', [["Авто"]])
@@ -3221,7 +3536,7 @@ def create_or_update_AD(spreadsheet_url: str = None, sa_json_path: str = None, w
                                 ad_plan_item = AdPlanItem.objects.create(
                                     store=store,
                                     sku=int(sku),
-                                    offer_id='',  # Пока не знаем offer_id
+                                    offer_id=offer_id,
                                     name=campaign_name,
                                     week_budget=used_week_budget,
                                     day_budget=used_week_budget / 7,
@@ -3234,7 +3549,8 @@ def create_or_update_AD(spreadsheet_url: str = None, sa_json_path: str = None, w
                                     campaign_type='CPC_PRODUCT',
                                     state=AdPlanItem.CAMPAIGN_STATE_PLANNED,  # Изначально запланирована
                                     google_sheet_row=row_number,
-                                    is_active_in_sheets=(active == '1')  # Сохраняем статус активности из Google Sheets
+                                    is_active_in_sheets=(active == '1'),  # Сохраняем статус активности из Google Sheets
+                                    is_mandatory=bool(offer_id and offer_id in mandatory_offer_ids_set),
                                 )
                                 
                                 logger.info(f"[📝] Создана запись AdPlanItem для кампании {campaign_id} (SKU: {sku})")
@@ -3281,6 +3597,7 @@ def create_or_update_AD(spreadsheet_url: str = None, sa_json_path: str = None, w
                         store=store,
                         ozon_campaign_id=campaign_id
                     ).first()
+                    offer_id = str(ad_data.get('article') or '').strip()
                     
                     if auto_campaign:
                         # Проверяем дату создания и время обучения
@@ -3292,9 +3609,22 @@ def create_or_update_AD(spreadsheet_url: str = None, sa_json_path: str = None, w
                         logger.debug(f"[📅] Кампания {campaign_id} создана {campaign_age_days} дней назад, время обучения: {train_days} дней")
                         
 
+                        pending_updates: list[str] = []
+                        if offer_id and auto_campaign.offer_id != offer_id:
+                            auto_campaign.offer_id = offer_id
+                            pending_updates.append('offer_id')
+                        mandatory_flag = bool(offer_id and offer_id in mandatory_offer_ids_set)
+                        if mandatory_flag and not auto_campaign.is_mandatory:
+                            auto_campaign.is_mandatory = True
+                            pending_updates.append('is_mandatory')
+                        if auto_campaign.google_sheet_row != ad_data['row_number']:
+                            auto_campaign.google_sheet_row = ad_data['row_number']
+                            pending_updates.append('google_sheet_row')
+
+                        saved_after_budget = False
+
                         try:
-                            
-                             # Обрабатываем ручной бюджет
+                            # Обрабатываем ручной бюджет
                             try:
                                 manual_budget_str = str(manual_week_budget).strip().replace(' ', '').replace('\xa0', '').replace('\u00A0', '').replace('\u202f', '').replace('\u202F', '').replace(',', '.') if manual_week_budget else '0'
                                 manual_budget_float = float(manual_budget_str) if manual_budget_str else 0.0
@@ -3321,10 +3651,22 @@ def create_or_update_AD(spreadsheet_url: str = None, sa_json_path: str = None, w
                                     logger.info(f"[🌐] API Ozon: бюджет кампании {campaign_id} обновлен успешно")
                                     
                                     # Обновляем в базе данных только после успешного API вызова
-                                    auto_campaign.week_budget = week_budget_float
-                                    auto_campaign.day_budget = round(used_week_budget / 7)
-                                    auto_campaign.manual_budget = manual_budget_float
-                                    auto_campaign.save(update_fields=['week_budget', 'day_budget'])
+                                    update_fields: list[str] = list(pending_updates)
+                                    if auto_campaign.week_budget != week_budget_float:
+                                        auto_campaign.week_budget = week_budget_float
+                                        update_fields.append('week_budget')
+                                    day_budget_value = round(used_week_budget / 7)
+                                    if auto_campaign.day_budget != day_budget_value:
+                                        auto_campaign.day_budget = day_budget_value
+                                        update_fields.append('day_budget')
+                                    if auto_campaign.manual_budget != manual_budget_float:
+                                        auto_campaign.manual_budget = manual_budget_float
+                                        update_fields.append('manual_budget')
+
+                                    if update_fields:
+                                        unique_updates = list(dict.fromkeys(update_fields))
+                                        auto_campaign.save(update_fields=unique_updates)
+                                        saved_after_budget = True
                                     
                                     logger.info(f"[✅] Бюджет кампании {campaign_id} обновлен в базе данных")
                                     campaigns_updated += 1  # Считаем как обновленную кампанию
@@ -3336,10 +3678,13 @@ def create_or_update_AD(spreadsheet_url: str = None, sa_json_path: str = None, w
                             else:
                                 logger.warning(f"[⚠️] Строка {ad_data['row_number']}: некорректный бюджет для обновления: {week_budget}")
                                 campaigns_skipped += 1
-                                
                         except Exception as update_error:
                             logger.error(f"[❌] Ошибка при обновлении бюджета кампании {campaign_id}: {update_error}")
                             campaigns_skipped += 1
+
+                        if pending_updates and not saved_after_budget:
+                            unique_updates = list(dict.fromkeys(pending_updates))
+                            auto_campaign.save(update_fields=unique_updates)
 
                         # Гарантируем, что в колонке E указан тип 'Авто' для существующей авто-кампании
                         try:
