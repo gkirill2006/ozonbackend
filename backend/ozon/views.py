@@ -473,6 +473,8 @@ class ProductAnalytics_V2_View(APIView):
                 # 3. R - Рекомендации к поставке, шт - туда параметр recommended_supply
                 item_analytics = item_analytics_map.get((cluster, sku))
 
+
+                mandatory_quantity = get_mandatory_quantity_for_product(product.offer_id, mandatory_products) if mandatory_products else None
                 
                 sales_qty = sales_by_cluster.get(cluster, {}).get(sku, {}).get("qty", 0)
                 sales_price = sales_by_cluster.get(cluster, {}).get(sku, {}).get("price", 0)
@@ -539,7 +541,7 @@ class ProductAnalytics_V2_View(APIView):
                 
                 #если в ячейке F7 стоит 1, то показываются ВСЕ
                 #товары, если пусто (по дефолту), то только те, которые имеют значение >0 в столбце T15.
-                if f7 == 0 and round(for_delivery) <= 0:
+                if f7 == 0 and round(for_delivery) <= 0 and mandatory_quantity is None:
                     continue
                 
                 
