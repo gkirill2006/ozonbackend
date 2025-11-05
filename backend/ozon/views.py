@@ -17,6 +17,7 @@ from .tasks import (
     sync_campaign_activity_with_sheets,
     toggle_store_ads_status,
     rebalance_auto_weekly_budgets,
+    sync_warehouse_stock_for_store,
 )
 
 import logging
@@ -282,6 +283,9 @@ class SyncFbsStockView(APIView):
 # Получение конечной аналитики по продуктам версия 2
 class ProductAnalytics_V2_View(APIView):
     def post(self, request):
+        logging.info("Headers: %s", request.headers)
+        logging.info("Query: %s", request.query_params)
+        logging.info("Body: %s", request.data)        
         start_time = time.time()
         api_key = request.data.get("Api-Key")
         client_id = request.data.get("client_id")
@@ -323,6 +327,7 @@ class ProductAnalytics_V2_View(APIView):
         if exclude_offer_ids:
             products = products.exclude(offer_id__in=exclude_offer_ids)
         products_by_sku = {p.sku: p for p in products}
+        # logging.info(f" Target SKU ={products_by_sku.get(2909660721)}")
         # Создаем словарь для получения barcode по offer_id
         offer_id_to_barcode = {p.offer_id: p.barcodes[0] if p.barcodes else None for p in products}
         
@@ -355,6 +360,7 @@ class ProductAnalytics_V2_View(APIView):
         stocks = WarehouseStock.objects.filter(store=ozon_store)
         stocks_by_cluster = {}
         total_stock_all_clusters = {}
+        requested_stock_by_sku = {}  # Отдельный расчет товаров в заявках на поставку
         logging.info(f"Остатки товаров по складам  {len(stocks)}")
         
         for stock in stocks:
@@ -372,7 +378,7 @@ class ProductAnalytics_V2_View(APIView):
                 stock.transit_stock_count +
                 stock.return_from_customer_stock_count
             )
-
+            
             # По кластеру
             if cluster not in stocks_by_cluster:
                 stocks_by_cluster[cluster] = {}
@@ -385,7 +391,12 @@ class ProductAnalytics_V2_View(APIView):
                 total_stock_all_clusters[stock.sku] = 0
             total_stock_all_clusters[stock.sku] += stock_sum
             
+            # Отдельный расчет товаров в заявках на поставку по SKU
+            if stock.sku not in requested_stock_by_sku:
+                requested_stock_by_sku[stock.sku] = 0
+            requested_stock_by_sku[stock.sku] += stock.requested_stock_count
             
+        # logging.info(f"Заявки на поставку по SKU 1928741963 {requested_stock_by_sku[1928741963]}")
         # FBS остатки
         fbs_stocks = FbsStock.objects.filter(store=ozon_store)
         fbs_by_sku = {}
@@ -447,7 +458,6 @@ class ProductAnalytics_V2_View(APIView):
                 all_skus |= set(sales_by_cluster[cluster])
             if cluster in stocks_by_cluster:
                 all_skus |= set(stocks_by_cluster[cluster])
-            logging.info(f"Всего уникальных товаров в кластере {cluster} = {len(all_skus)}")
 
             for sku in all_skus:
                 
@@ -1065,3 +1075,43 @@ class ToggleStoreAdsStatusView(APIView):
             return Response({"status": "ok", "result": result}, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class UpdateWarehouseStockView(APIView):
+    """
+    Эндпоинт для синхронного обновления остатков склада
+    """
+    def post(self, request):
+        try:
+            # Получаем данные из запроса
+            api_key = request.data.get("Api-Key")
+            client_id = request.data.get("client_id")
+            
+            # Проверяем наличие обязательных параметров
+            if not api_key or not client_id:
+                return Response({
+                    "error": "Отсутствуют обязательные параметры: Api-Key и client_id"
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Получаем магазин
+            try:
+                ozon_store = OzonStore.objects.get(api_key=api_key, client_id=client_id)
+            except OzonStore.DoesNotExist:
+                return Response({
+                    "error": "Магазин не найден"
+                }, status=status.HTTP_404_NOT_FOUND)
+            
+            # Синхронно обновляем остатки
+            sync_warehouse_stock_for_store(ozon_store)
+            
+            return Response({
+                "status": "success",
+                "message": f"Остатки склада успешно обновлены для магазина {ozon_store}",
+                "store_id": ozon_store.id
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logging.error(f"Ошибка при обновлении остатков склада: {str(e)}")
+            return Response({
+                "error": f"Внутренняя ошибка сервера: {str(e)}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

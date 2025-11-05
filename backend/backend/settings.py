@@ -200,6 +200,21 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Europe/Moscow'
 
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+
+# Настройки для предотвращения утечек памяти и стабильности
+CELERY_WORKER_MAX_MEMORY_PER_CHILD = 500000  # 500MB
+CELERY_WORKER_CONCURRENCY = 2
+CELERY_TASK_TIME_LIMIT = 3600  # 1 час максимальное время выполнения задачи
+CELERY_TASK_SOFT_TIME_LIMIT = 3000  # 50 минут мягкий лимит
+CELERY_WORKER_DISABLE_RATE_LIMITS = True
+CELERY_TASK_IGNORE_RESULT = True
+CELERY_RESULT_EXPIRES = 3600  # Результаты удаляются через час
+
+# Настройки для стабильности брокера
+CELERY_BROKER_CONNECTION_RETRY = True
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+CELERY_BROKER_CONNECTION_MAX_RETRIES = 10
+
 # CELERY_BROKER_URL = "redis://redis:6379"
 # CELERY_RESULT_BACKEND = "redis://redis:6379"
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 100000

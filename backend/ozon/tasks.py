@@ -2601,7 +2601,6 @@ def rebalance_auto_weekly_budgets(
                 return {"skipped": True, "reason": "no auto campaigns"}
 
             # 1) Удаляем кампании, которые больше не являются обязательными
-            rows_to_delete: list[int] = []
             removal_entries: list[tuple[dict, AdPlanItem]] = []
             for row in auto_rows:
                 campaign_id = row['campaign_id']
@@ -2616,7 +2615,6 @@ def rebalance_auto_weekly_budgets(
                 if offer_id_cell in mandatory_offer_ids_set:
                     continue
                 removal_entries.append((row, ad_item))
-                rows_to_delete.append(row['row_number'])
 
             if removal_entries:
                 if ozon_access_token is None:
@@ -2630,6 +2628,7 @@ def rebalance_auto_weekly_budgets(
                         logger.error(f"[❌] Ошибка получения access_token для деактивации кампаний магазина {store}: {token_err}")
                         ozon_access_token = None
 
+                removed_keys: set[str] = set()
                 for row, ad_item in removal_entries:
                     campaign_id = ad_item.ozon_campaign_id
                     if ozon_access_token:
@@ -2645,13 +2644,14 @@ def rebalance_auto_weekly_budgets(
                         ad_item.save(update_fields=['is_mandatory', 'is_active_in_sheets', 'google_sheet_row'])
                     except Exception as save_err:
                         logger.warning(f"[⚠️] Не удалось обновить флаги кампании {campaign_id} после удаления: {save_err}")
+                    offer_id_effective = (row.get('offer_id') or '').strip()
+                    if offer_id_effective and offer_id_effective in auto_offer_ids_in_sheet:
+                        auto_offer_ids_in_sheet.discard(offer_id_effective)
+                    removed_keys.add(row['key'])
 
-                for row_num in sorted(rows_to_delete, reverse=True):
-                    try:
-                        ws.delete_rows(row_num)
-                        logger.info(f"[🗑️] Строка {row_num} удалена с листа Main_ADV (кампания больше не обязательна)")
-                    except Exception as delete_err:
-                        logger.error(f"[❌] Не удалось удалить строку {row_num} из Main_ADV: {delete_err}")
+                if removed_keys:
+                    auto_rows = [row for row in auto_rows if row['key'] not in removed_keys]
+                    logger.info(f"[🧹] Исключено {len(removed_keys)} кампаний из выдачи после снятия флага обязательности")
 
                 # После удаления строк перечитываем лист
                 continue
