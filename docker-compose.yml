@@ -1,22 +1,22 @@
 
 services:
-  wb_analyzer:
-    build: .
-    container_name: wb_analyzer
-    ports:
-      - "9005:8000"
-    mem_limit: 512m
-    cpus: 0.5
-    restart: always
-    env_file: .env
-    volumes:
-      - .:/app
+  # wb_analyzer:
+  #   build: .
+  #   container_name: wb_analyzer
+  #   ports:
+  #     - "9005:8000"
+  #   mem_limit: 512m
+  #   cpus: 0.5
+  #   restart: always
+  #   env_file: .env
+  #   volumes:
+  #     - .:/app
 
-  markets_backend:
+  markets-backend:
     build:
       context: .
       dockerfile: docker/Dockerfile.backend
-    container_name: markets_backend
+    container_name: markets-backend
     ports:
       - "9006:8000"
     mem_limit: 1g
@@ -44,7 +44,7 @@ services:
     volumes:
       - .:/workspace
     depends_on:
-      - markets_backend
+      - markets-backend
       - redis
     restart: always
     healthcheck:
@@ -65,7 +65,7 @@ services:
       volumes:
         - .:/workspace
       depends_on:
-        - markets_backend
+        - markets-backend
         - redis
         - db
       restart: always
@@ -103,5 +103,16 @@ services:
       timeout: 10s
       retries: 3
 
+  bot:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.bot
+    container_name: ozon_bot
+    env_file: .env
+    volumes:
+      - .:/workspace
+    working_dir: /workspace/telegram_bot
+    depends_on:
+      - markets-backend
 volumes:
   pgdata:

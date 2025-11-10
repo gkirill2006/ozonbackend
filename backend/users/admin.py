@@ -1,20 +1,20 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, OzonStore
+from .models import User, OzonStore, StoreFilterSettings
 from ozon.tasks import sync_full_store_data
 from django.contrib import messages
 
 @admin.register(User)
-class UserAdmin(BaseUserAdmin):
-    list_display = ('username', 'is_staff')
+class UserAdmin(admin.ModelAdmin):
+    list_display = ('username',)
 
     # При создании нового пользователя
-    add_fieldsets = (
-        (None, {
-            'classes': ('wide',),
-            'fields': ('username', 'password1', 'password2', ),
-        }),
-    )
+    # add_fieldsets = (
+    #     (None, {
+    #         'classes': ('wide',),
+    #         'fields': ('username', 'password1', 'password2', ),
+    #     }),
+    # )
 
     # При редактировании пользователя
 
@@ -31,3 +31,9 @@ class OzonStoreAdmin(admin.ModelAdmin):
             sync_full_store_data.delay(store.id)
             count += 1
         self.message_user(request, f"Задачи синхронизации запущены для {count} магазинов.", messages.INFO)
+
+
+@admin.register(StoreFilterSettings)
+class StoreFilterSettingsAdmin(admin.ModelAdmin):
+    list_display = ('store', 'planning_days', 'analysis_period', 'sort_by', 'updated_at')
+    search_fields = ('store__name', 'store__client_id')

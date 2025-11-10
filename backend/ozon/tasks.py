@@ -1438,7 +1438,8 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
                     'type': 'Авто',  # Автоматическая
                     'ozon_updated_at': None,  # У автоматических кампаний нет ozon_updated_at
                     'status': _translate_campaign_status(auto_status, is_manual=False),
-                    'ozon_campaign_id': campaign.ozon_campaign_id or ''
+                    'ozon_campaign_id': campaign.ozon_campaign_id or '',
+                    'is_active_in_sheet': 1 if campaign.is_active_in_sheets else 0,
                 }
     
     # Логируем количество найденных автоматических кампаний
@@ -1995,7 +1996,7 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
                 manual_campaign = ManualCampaign.objects.filter(store=store, sku=sku).first()
                 if manual_campaign:
                     status_russian = _translate_campaign_status(manual_campaign.state)
-            
+
             campaign_names.append([campaign_name_with_status])  # D: формируем название кампании со статусом
             # Получаем недельный бюджет ручной кампании, если есть
             manual_week_budget = ''
@@ -2028,7 +2029,14 @@ def update_abc_sheet(spreadsheet_url: str = None, sa_json_path: str = None, cons
             else:
                 auto_info = auto_campaigns_dict.get(sku, {})
                 status_val = auto_info.get('status', '')
-                is_enabled = 1 if status_val in ['Активна', 'Запущена'] else 0
+                sheet_enabled = auto_info.get('is_active_in_sheet')
+                if sheet_enabled is not None:
+                    try:
+                        is_enabled = 1 if int(sheet_enabled) == 1 else 0
+                    except Exception:
+                        is_enabled = 1 if status_val in ['Активна', 'Запущена'] else 0
+                else:
+                    is_enabled = 1 if status_val in ['Активна', 'Запущена'] else 0
                 meta_info = {
                     'type': 'auto' if auto_info else 'auto_new',
                     'campaign_id': auto_info.get('ozon_campaign_id', ''),
@@ -2682,11 +2690,14 @@ def rebalance_auto_weekly_budgets(
                         logger.warning(f"[⚠️] Не удалось установить флаг is_mandatory для кампании {item.ozon_campaign_id}: {save_err}")
                 sku_str = str(int(sku_value)) if str(sku_value).isdigit() else str(sku_value)
                 week_budget_str = str(float(min_budget)) if min_budget and min_budget > 0 else '0'
+                name_base = campaign_name_value or f"Auto {offer_id}"
+                name_with_date = f"{name_base} {timezone.localtime().strftime('%d/%m/%y')}"
+
                 row_values = [
                     '',
                     '1',
                     '',
-                    campaign_name_value or f"Auto {offer_id}",
+                    name_with_date,
                     'Авто',
                     offer_id,
                     sku_str,

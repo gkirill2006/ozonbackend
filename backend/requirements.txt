@@ -13,3 +13,5 @@ django_celery_beat
 gspread
 gspread-formatting
 google-auth
+drf-yasg
+

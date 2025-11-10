@@ -35,12 +35,19 @@ MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
 ALLOWED_HOSTS = [
-    "markets_backend",
-    "markets_backend:8000",
+    "markets-backend",
+    "markets-backend:8000",
     "localhost",
     "127.0.0.1",
     "94.141.122.224",
     "188.68.222.242",
+]
+CSRF_TRUSTED_ORIGINS = [
+    'http://markets-backend:8000',
+    'https://t.me',
+    'https://web.telegram.org',
+    'http://localhost:9000',
+    'http://127.0.0.1:9000'
 ]
 
 # CSRF_TRUSTED_ORIGINS = ['']
