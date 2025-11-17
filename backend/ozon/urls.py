@@ -13,6 +13,7 @@ from .views import (
     ToggleStoreAdsStatusView,
     TriggerRebalanceAutoBudgetsView,
     UpdateWarehouseStockView,
+    Planer_View,
 )
 urlpatterns = [
     path('ozon/products/', SyncOzonProductView.as_view()),
@@ -29,5 +30,6 @@ urlpatterns = [
     path("ozon/ads/toggle/", ToggleStoreAdsStatusView.as_view()),
     path("ozon/campaigns/rebalance-weekly/", TriggerRebalanceAutoBudgetsView.as_view()),
     path("ozon/warehouse/update/", UpdateWarehouseStockView.as_view()),
+    path("ozon/planner/", Planer_View.as_view(), name="ozon-planner"),
 
 ]

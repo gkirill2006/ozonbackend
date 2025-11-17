@@ -82,6 +82,8 @@ class UserStoreAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['store_id'], store.pk)
         self.assertEqual(response.data['planning_days'], 28)
+        self.assertEqual(response.data['required_products'], [])
+        self.assertEqual(response.data['excluded_products'], [])
         self.assertTrue(StoreFilterSettings.objects.filter(store=store).exists())
 
     def test_update_filter_settings(self):
@@ -95,17 +97,31 @@ class UserStoreAPITests(APITestCase):
             'price_max': 2500,
             'show_no_need': True,
             'sort_by': 'revenue',
+            'required_products': [
+                {'article': 'DT830', 'quantity': 50},
+                {'article': 'IEC320', 'quantity': 30},
+            ],
+            'excluded_products': [
+                {'article': 'CronsteinForConditioner'},
+                {'article': 'Dream WF-0963'},
+            ],
         }
 
         response = self.client.patch(url, payload, format='json')
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         settings = StoreFilterSettings.objects.get(store=store)
+        self.assertEqual(len(response.data['required_products']), 2)
+        self.assertEqual(len(response.data['excluded_products']), 2)
         self.assertEqual(settings.planning_days, 14)
         self.assertEqual(settings.sort_by, 'revenue')
         self.assertEqual(settings.show_no_need, True)
         self.assertEqual(settings.price_min, Decimal('1500'))
         self.assertEqual(settings.price_max, Decimal('2500'))
+        self.assertEqual(settings.required_products.count(), 2)
+        self.assertEqual(settings.excluded_products.count(), 2)
+        self.assertTrue(settings.required_products.filter(article='DT830', quantity=50).exists())
+        self.assertTrue(settings.excluded_products.filter(article='Dream WF-0963').exists())
 
     def test_user_cannot_access_foreign_store_filters(self):
         store = self._create_store(user=self.other_user, client_id='foreign', api_key='foreign-key')

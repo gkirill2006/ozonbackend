@@ -1,7 +1,7 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status
-from users.models import User, OzonStore
+from rest_framework import permissions, status
+from users.models import User, OzonStore, StoreFilterSettings
 from .models import (Product, Category, ProductType, WarehouseStock, Sale, FbsStock, DeliveryCluster, 
                      DeliveryClusterItemAnalytics, DeliveryAnalyticsSummary)
 from .utils import (fetch_all_products_from_ozon, fetch_detailed_products_from_ozon, fetch_and_save_category_tree, fetch_warehouse_stock,
@@ -1115,3 +1115,488 @@ class UpdateWarehouseStockView(APIView):
             return Response({
                 "error": f"Внутренняя ошибка сервера: {str(e)}"
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+
+
+
+class Planer_View(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    SORT_MAPPING = {
+        'orders': 1,
+        'revenue': 2,
+        'ozon-rec': 3,
+    }
+
+    def _get_filters_from_settings(self, store: OzonStore):
+        settings, _ = StoreFilterSettings.objects.get_or_create(store=store)
+        return {
+            "days": int(settings.planning_days),
+            "sort_by_qty": self.SORT_MAPPING.get(settings.sort_by, 1),
+            "b7": 1 if float(settings.warehouse_weight or 0) > 0 else 0,
+            "f9": float(settings.specific_weight_threshold),
+            "period_analiz": int(settings.analysis_period),
+            "price_min": float(settings.price_min),
+            "price_max": float(settings.price_max),
+            "f6": float(settings.turnover_min) if settings.turnover_min is not None else None,
+            "g6": float(settings.turnover_max) if settings.turnover_max is not None else None,
+            "f7": 1 if settings.show_no_need else 0,
+            "f10": float(settings.turnover_from_stock or 0),
+            "exclude_offer_ids": list(settings.excluded_products.values_list("article", flat=True)),
+            "mandatory_products": [
+                {"offer_id": product.article, "quantity": product.quantity}
+                for product in settings.required_products.all()
+            ],
+        }
+
+    def post(self, request):
+        start_time = time.time()
+        store_id = request.data.get("store_id") or request.query_params.get("store_id")
+        if not store_id:
+            return Response({"error": "store_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            store_id = int(store_id)
+        except (TypeError, ValueError):
+            return Response({"error": "store_id must be an integer"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            ozon_store = OzonStore.objects.get(id=store_id, user=request.user)
+        except OzonStore.DoesNotExist:
+            return Response({"error": "Store not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        filters = self._get_filters_from_settings(ozon_store)
+        days = filters["days"]
+        sort_by_qty = filters["sort_by_qty"]
+        b7 = filters["b7"]
+        f9 = filters["f9"]
+        period_analiz = filters["period_analiz"]
+        price_min = filters["price_min"]
+        price_max = filters["price_max"]
+        f6 = filters["f6"]
+        g6 = filters["g6"]
+        f7 = filters["f7"]
+        f10 = filters["f10"]
+        exclude_offer_ids = filters["exclude_offer_ids"]
+        mandatory_products = filters["mandatory_products"]
+
+        logging.info(
+            "Planner request store=%s days=%s sort_by=%s period=%s price_range=(%s,%s) "
+            "turnover=(%s,%s) show_no_need=%s",
+            ozon_store.id,
+            days,
+            sort_by_qty,
+            period_analiz,
+            price_min,
+            price_max,
+            f6,
+            g6,
+            f7,
+        )
+
+        if days > 60 or days < 0:
+            return Response({"error": "Период анализа должен быть от 0 до 60 дней"}, status=400)
+        if price_max < price_min:
+            return Response({"error": "Минимальная цена не может быть больше максимальной"}, status=400)
+
+        since_date = timezone.now() - timedelta(days=days)
+        since_date = since_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        # Все товары
+        products = Product.objects.filter(
+            store=ozon_store,
+            price__gte=price_min,
+            price__lte=price_max
+        )
+        
+        # Исключаем товары по артикулам, если указаны
+        if exclude_offer_ids:
+            products = products.exclude(offer_id__in=exclude_offer_ids)
+        products_by_sku = {p.sku: p for p in products}
+        # logging.info(f" Target SKU ={products_by_sku.get(2909660721)}")
+        # Создаем словарь для получения barcode по offer_id
+        offer_id_to_barcode = {p.offer_id: p.barcodes[0] if p.barcodes else None for p in products}
+        
+        
+
+        # Продажи
+        logging.info(f"Дата до которой смотрим {since_date}")
+        sales = Sale.objects.filter(store=ozon_store, date__gte=since_date, sale_type__in=[Sale.FBO, Sale.FBS])
+        sales_by_cluster = {}
+        logging.info(f"Кол-во продаж {len(sales)}")
+        for s in sales:
+            cluster = s.cluster_to or "Без кластера"
+            sales_by_cluster.setdefault(cluster, {})
+            sales_by_cluster[cluster].setdefault(s.sku, {"qty": 0, "price": 0})
+            sales_by_cluster[cluster][s.sku]["qty"] += s.quantity
+            sales_by_cluster[cluster][s.sku]["price"] += float(s.price)*s.quantity
+
+        logging.info(f"Кол-во кластеров  {len(sales_by_cluster)}")
+        
+        # Посчитаем количество продаж по каждой позиции SKU и получим по каждому товару количество продаж
+        product_revenue_map_qty = {}  
+        for cluster in sales_by_cluster:
+            for sku, data in sales_by_cluster[cluster].items():
+                product_revenue_map_qty.setdefault(sku, 0)
+                product_revenue_map_qty[sku] += data["qty"]
+                
+        logging.info(f"Количество уникальных SKU product_revenue_map_qty =  {len(product_revenue_map_qty)}")  
+              
+        # Остатки товаров по складам
+        stocks = WarehouseStock.objects.filter(store=ozon_store)
+        stocks_by_cluster = {}
+        total_stock_all_clusters = {}
+        requested_stock_by_sku = {}  # Отдельный расчет товаров в заявках на поставку
+        logging.info(f"Остатки товаров по складам  {len(stocks)}")
+        
+        for stock in stocks:
+            cluster = stock.cluster_name or "Без кластера"
+            stock_sum = (
+                stock.available_stock_count +
+                stock.valid_stock_count +
+                stock.waiting_docs_stock_count +
+                stock.expiring_stock_count +
+                stock.transit_defect_stock_count +
+                stock.stock_defect_stock_count +
+                stock.excess_stock_count +
+                stock.other_stock_count +
+                stock.requested_stock_count +
+                stock.transit_stock_count +
+                stock.return_from_customer_stock_count
+            )
+            
+            # По кластеру
+            if cluster not in stocks_by_cluster:
+                stocks_by_cluster[cluster] = {}
+            if stock.sku not in stocks_by_cluster[cluster]:
+                stocks_by_cluster[cluster][stock.sku] = 0
+            stocks_by_cluster[cluster][stock.sku] += stock_sum
+
+            # По всем кластерам
+            if stock.sku not in total_stock_all_clusters:
+                total_stock_all_clusters[stock.sku] = 0
+            total_stock_all_clusters[stock.sku] += stock_sum
+            
+            # Отдельный расчет товаров в заявках на поставку по SKU
+            if stock.sku not in requested_stock_by_sku:
+                requested_stock_by_sku[stock.sku] = 0
+            requested_stock_by_sku[stock.sku] += stock.requested_stock_count
+            
+        # logging.info(f"Заявки на поставку по SKU 1928741963 {requested_stock_by_sku[1928741963]}")
+        # FBS остатки
+        fbs_stocks = FbsStock.objects.filter(store=ozon_store)
+        fbs_by_sku = {}
+        for f in fbs_stocks:
+            fbs_by_sku.setdefault(f.sku, 0)
+            fbs_by_sku[f.sku] += f.present
+
+
+
+        # 1. Подсчёт выручки по всем кластерам и всем товарам
+        total_revenue = 0
+        revenue_by_cluster = {}
+        product_revenue_map = {}
+
+        for cluster in sales_by_cluster:
+            for sku, data in sales_by_cluster[cluster].items():
+                revenue_by_cluster.setdefault(cluster, 0)
+                revenue_by_cluster[cluster] += data["price"]
+
+                product_revenue_map.setdefault(sku, 0)
+                product_revenue_map[sku] += data["price"]
+
+        total_revenue = sum(revenue_by_cluster.values()) or 1  # защита от деления на 0
+
+        
+        # Получаем данные по кластерам доставки average_delivery_time impact_share
+        delivery_cluster_data = {
+            dc.name: {
+                "average_delivery_time": dc.average_delivery_time,
+                "impact_share": dc.impact_share
+            }
+            for dc in DeliveryCluster.objects.filter(store=ozon_store)
+        }
+
+        
+        # Получаем аналитику по товарам в кластерах доставки
+        # ЧАСТНАЯ АНАЛИТИКА ПО КЛАСТЕРУ
+        item_analytics_map = {
+            (a.cluster_name, a.sku): a
+            for a in DeliveryClusterItemAnalytics.objects.filter(store=ozon_store)
+        }
+        
+        # 2. Финальная сборка по кластерам
+        all_clusters = set(sales_by_cluster) | set(stocks_by_cluster)
+
+        cluster_list = []
+        # len(all_clusters)
+        logging.info(f"Total len clusters = {len(all_clusters)}")
+        offer_delivery_totals = {}
+        for cluster in all_clusters:
+            cluster_data = {
+                "cluster_name": cluster,
+                "cluster_revenue": round(revenue_by_cluster.get(cluster, 0), 2),
+                "cluster_share_percent": round((revenue_by_cluster.get(cluster, 0) / total_revenue) * 100, 2),
+                "products": []
+            }
+            all_skus = set()
+            if cluster in sales_by_cluster:
+                all_skus |= set(sales_by_cluster[cluster])
+            if cluster in stocks_by_cluster:
+                all_skus |= set(stocks_by_cluster[cluster])
+
+            for sku in all_skus:
+                
+                product = products_by_sku.get(sku)
+                
+                if not product:
+                    # logging.info(f"434 строчка если нет product продолжаем")
+                    continue
+                
+                # ОБЩАЯ АНАЛИТИКА ПО КЛАСТЕРУ (/v1/analytics/average-delivery-time) - это значит, что
+                # на все артикулы в данном кластере цифры должны быть одинаковые
+                # После столбца M(кластер) необходимо добавить следующие столбцы:
+                # 1. N - Ср. время доставки до покупателя - туда вставить данные общие из параметра
+                # average_delivery_time (там 2 разных приходит, надо с вами потестить)
+                # 2. O - Доля влияния, %, туда вставить параметр impact_share
+                delivery_info = delivery_cluster_data.get(cluster, {"average_delivery_time": 0, "impact_share": 0})
+
+                # ЧАСТНАЯ АНАЛИТИКА ПО КЛАСТЕРУ (/v1/analytics/average-delivery-time/details) - это
+                # значит, что получаем цифры по каждому товару уникальные
+                # 1. P - Ср. время доставки до покупателя ТОВАР, ч - average_delivery_time (тоже там два
+                # разных надо потестить)
+                # 2. Q - Доля влияния на ТОВАР, % - туда вставить параметр impact_share (
+                # 3. R - Рекомендации к поставке, шт - туда параметр recommended_supply
+                item_analytics = item_analytics_map.get((cluster, sku))
+
+
+                mandatory_quantity = get_mandatory_quantity_for_product(product.offer_id, mandatory_products) if mandatory_products else None
+                
+                sales_qty = sales_by_cluster.get(cluster, {}).get(sku, {}).get("qty", 0)
+                sales_price = sales_by_cluster.get(cluster, {}).get(sku, {}).get("price", 0)
+                stock_qty_cluster = stocks_by_cluster.get(cluster, {}).get(sku, 0)
+                total_stock_qty = total_stock_all_clusters.get(sku, 0)
+
+                #    stock_total_cluster/
+                avg_daily_sales_total = round(product_revenue_map_qty.get(sku, 0) / days, 2) if days else 0
+                fbo_total_stock = total_stock_all_clusters.get(sku, 0)
+                oborachivaemost = round((fbo_total_stock / avg_daily_sales_total),2) if avg_daily_sales_total else 0
+                
+                
+                if g6 is not None and oborachivaemost > g6:
+                    # logging.info(f"g6 is not None and oborachivaemost > g6")
+                    continue
+                if f6 is not None and oborachivaemost < f6:
+                    # logging.info(f"g6 is not None and oborachivaemost < g6")
+                    continue
+                
+                # if sku == 653610923:
+                #     logging.info(f"SKU == {sku}")
+                #     logging.info(f"Оборачиваемость == {oborachivaemost}")
+                #     logging.info(f"Name == {product.offer_id}")
+                    
+                if f10 is not None and f10 > float(total_stock_qty) :
+                    oborachivaemost = 0
+                    # logging.info(f"479 | if f10 is not None and f10 > float(total_stock_qty)")
+                
+                total_sum_sku_all_claster = product_revenue_map.get(sku, 0) #Сумма выручки по всем кластерам для данного SKU
+                share_of_total_daily_average = sales_price / total_sum_sku_all_claster if total_sum_sku_all_claster else 0
+                
+                if b7 == 1 and share_of_total_daily_average >= f9:
+                    # K15*B5*R15-S15
+                    for_delivery = round(product_revenue_map_qty.get(sku, 0) / days, 2) * period_analiz * share_of_total_daily_average - stock_qty_cluster
+                    need_goods = round(product_revenue_map_qty.get(sku, 0) / days, 2) * period_analiz * share_of_total_daily_average
+                elif b7 == 1 and share_of_total_daily_average < f9:
+                    # K15*B5*F9-S15
+                    for_delivery = round(product_revenue_map_qty.get(sku, 0) / days, 2) * period_analiz * f9 - stock_qty_cluster
+                    need_goods = round(product_revenue_map_qty.get(sku, 0) / days, 2) * period_analiz * f9
+                
+                elif b7 == 0 or b7 == None:
+                    # K15*B5/на все кластера - S15
+                    for_delivery = round(product_revenue_map_qty.get(sku, 0) / days, 2) * period_analiz / len(all_clusters)  - stock_qty_cluster
+                    need_goods = round(product_revenue_map_qty.get(sku, 0) / days, 2) * period_analiz / len(all_clusters)
+                    # if round(for_delivery) > 0:
+                    #     logging.info(f"{sku} | for delyvery = {for_delivery}")
+                
+                elif b7 == 2:
+                    for_delivery = (item_analytics.recommended_supply if item_analytics else 0) - stock_qty_cluster
+                    need_goods = (item_analytics.recommended_supply if item_analytics else 0)
+                    
+                    # if sku == 353866151:
+                    #     logging.info(f"b7 == {b7} item_analytics.recommended_supply == {item_analytics.recommended_supply if item_analytics else 0} and stock_qty_cluster == {stock_qty_cluster}")
+                    
+                else:
+                    
+                    for_delivery = 0
+                    need_goods = 0
+                    # logging.info(f"b7 == {b7} and share_of_total_daily_average == {share_of_total_daily_average} and f9 == {f9
+                    # logging.info(f"b7 == {b7} and share_of_total_daily_average == {share_of_total_daily_average} and f9 == {f9}")
+                    # logging.info(product_revenue_map)   
+                
+
+                
+                #если в ячейке F7 стоит 1, то показываются ВСЕ
+                #товары, если пусто (по дефолту), то только те, которые имеют значение >0 в столбце T15.
+                if f7 == 0 and round(for_delivery) <= 0 and mandatory_quantity is None:
+                    continue
+                
+                
+                offer_delivery_totals.setdefault(product.offer_id, 0)
+                offer_delivery_totals[product.offer_id] += round(for_delivery)
+                # if sku == 662496696:
+                #     logging.info(f"Claster name == {cluster}")
+                #     logging.info(f"Product == {product}")
+                #     logging.info(f"share_of_total_daily_average == {share_of_total_daily_average}  == {sales_price} / {total_sum_sku_all_claster}")
+                cluster_data["products"].append({
+                    "sku": sku,
+                    "name": product.name,
+                    "offer_id": product.offer_id,
+                    "photo": product.primary_image,
+                    "category": product.category,
+                    "type_name": product.type_name,
+                    "price": float(product.price or 0),
+                    "barcodes": product.barcodes,
+                    "ozon_link": f"https://www.ozon.ru/product/{product.sku}/",
+                    "sales_total_fbo_fbs":product_revenue_map_qty.get(sku, 0),
+                    "payout_total": round(sales_price, 2),
+                    "avg_daily_sales_fbo_fbs": round(product_revenue_map_qty.get(sku, 0) / days, 2) if days else 0,
+                    "stock_total_cluster": stock_qty_cluster,
+                    "fbs_stock_total_qty": fbs_by_sku.get(sku, 0),
+                    "product_total_revenue_fbo_fbs": round(product_revenue_map.get(sku, 0), 2),
+                    "avg_daily_sales_cluster_qty" : round(sales_qty / days, 2) if days else 0,
+                    "avg_daily_sales_cluster_rub" : round(sales_price / days, 2) if days else 0,
+                    "oborachivaemost": oborachivaemost,
+                    "share_of_total_daily_average": share_of_total_daily_average,                    
+                    "sales_qty_cluster": sales_qty,
+                    "for_delivery" : round(for_delivery),
+                    "need_goods" : need_goods,
+                    "average_delivery_time": delivery_info["average_delivery_time"],
+                    "impact_share": delivery_info["impact_share"],
+                    "average_delivery_time_item": item_analytics.average_delivery_time if item_analytics else "",
+                    "impact_share_item": item_analytics.impact_share if item_analytics else "",
+                    "recommended_supply_item": item_analytics.recommended_supply if item_analytics else "",
+
+                    
+                    
+                })
+                
+            
+            if sort_by_qty == 1:
+                # сортировка товаров по количеству продаж FBO+FBS
+                cluster_data["products"].sort(key=lambda x: x["sales_total_fbo_fbs"], reverse=True)
+                
+
+            # сортировка товаров по выручке FBO+FBS
+            if sort_by_qty == 2:
+                cluster_data["products"].sort(key=lambda x: x["product_total_revenue_fbo_fbs"], reverse=True)
+
+            if sort_by_qty == 3:
+                cluster_data["products"].sort(key=lambda x: x.get("recommended_supply_item") or 0,reverse=True
+)
+                
+            cluster_list.append(cluster_data)
+            summary = [
+                    {
+                        "offer_id": offer_id,
+                        "barcode": offer_id_to_barcode.get(offer_id),
+                        "total_for_delivery": qty
+                    } for offer_id, qty in offer_delivery_totals.items()
+                ]
+
+        # Пересчет for_delivery для обязательных товаров после всех основных расчетов
+        if mandatory_products:
+            # Сначала собираем информацию о том, в каких кластерах есть обязательные товары
+            mandatory_clusters = {}
+            for cluster_data in cluster_list:
+                cluster_name = cluster_data["cluster_name"]
+                for product_data in cluster_data["products"]:
+                    offer_id = product_data["offer_id"]
+                    mandatory_quantity = get_mandatory_quantity_for_product(offer_id, mandatory_products)
+                    if mandatory_quantity is not None:
+                        if offer_id not in mandatory_clusters:
+                            mandatory_clusters[offer_id] = []
+                        mandatory_clusters[offer_id].append(cluster_name)
+            
+            # Рассчитываем веса кластеров
+            cluster_weights = {}
+            for cluster, revenue in revenue_by_cluster.items():
+                if total_revenue > 0:
+                    cluster_weights[cluster] = revenue / total_revenue
+                else:
+                    cluster_weights[cluster] = 0
+            
+            # Проходим по всем кластерам и товарам
+            for cluster_data in cluster_list:
+                cluster_name = cluster_data["cluster_name"]
+                
+                for product_data in cluster_data["products"]:
+                    offer_id = product_data["offer_id"]
+                    sku = product_data["sku"]
+                    
+                    # Проверяем, является ли товар обязательным
+                    mandatory_quantity = get_mandatory_quantity_for_product(offer_id, mandatory_products)
+                    if mandatory_quantity is not None:
+                        # Получаем общий остаток FBO для товара по всем кластерам
+                        total_fbo_stock = total_stock_all_clusters.get(sku, 0)
+                        
+                        
+                        # Если сумма остатков меньше обязательного количества
+                        if total_fbo_stock < mandatory_quantity:
+                            # Рассчитываем разницу - сколько нужно распределить
+                            needed_quantity = mandatory_quantity - total_fbo_stock
+                            
+                            # Получаем кластеры, где есть этот товар
+                            clusters_for_product = mandatory_clusters.get(offer_id, [])
+                            
+                            if clusters_for_product:
+                                # Рассчитываем общий вес кластеров для этого товара
+                                total_weight_for_product = sum(cluster_weights.get(cluster, 0) for cluster in clusters_for_product)
+                                
+                                if total_weight_for_product > 0:
+                                    # Используем пропорциональное распределение
+                                    cluster_weight = cluster_weights.get(cluster_name, 0)
+                                    cluster_quantity = round(needed_quantity * (cluster_weight / total_weight_for_product))
+                                else:
+                                    # Если нет выручки, распределяем равномерно
+                                    cluster_quantity = round(needed_quantity / len(clusters_for_product))
+                            else:
+                                cluster_quantity = 0
+                            
+                            
+                            # Устанавливаем for_delivery равным cluster_quantity
+                            product_data["for_delivery"] = cluster_quantity
+                            
+                            # Обновляем общую сумму для summary
+                            offer_delivery_totals[offer_id] = sum(
+                                p["for_delivery"] for cluster in cluster_list 
+                                for p in cluster["products"] 
+                                if p["offer_id"] == offer_id
+                            )
+            
+            # Обновляем summary с новыми значениями
+            summary = [
+                {
+                    "offer_id": offer_id,
+                    "barcode": offer_id_to_barcode.get(offer_id),
+                    "total_for_delivery": qty
+                } for offer_id, qty in offer_delivery_totals.items()
+            ]
+
+        # сортировка кластеров по выручке
+        cluster_list.sort(key=lambda c: c["cluster_revenue"], reverse=True)
+        summary.sort(key=lambda c: c["total_for_delivery"], reverse=True)
+
+        # Сводная аналитика доставки
+        try:
+            average_time = DeliveryAnalyticsSummary.objects.get(store=ozon_store).average_delivery_time
+        except DeliveryAnalyticsSummary.DoesNotExist:
+            average_time = None        
+        execution_time = round(time.time() - start_time, 3)
+        logging.info(f"[⏱] Время выполнения запроса: {execution_time}s")
+        resp = Response({
+            "clusters": cluster_list,
+            "summary": summary,
+            "execution_time_seconds": execution_time,
+            "average_delivery_time": average_time,
+        })
+        resp["X-Execution-Time-s"] = f"{execution_time:.3f}"
+        return resp

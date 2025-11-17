@@ -6,7 +6,13 @@ logger = logging.getLogger(__name__)
 import json
 
 from rest_framework import serializers
-from .models import User, OzonStore, StoreFilterSettings
+from .models import (
+    User,
+    OzonStore,
+    StoreFilterSettings,
+    StoreRequiredProduct,
+    StoreExcludedProduct,
+)
 from django.utils import timezone
 import hashlib
 import hmac
@@ -238,6 +244,29 @@ class OzonStoreSerializer(serializers.ModelSerializer):
         read_only_fields = ['id']
 
 
+class StoreRequiredProductSerializer(serializers.ModelSerializer):
+    id = serializers.IntegerField(required=False)
+
+    class Meta:
+        model = StoreRequiredProduct
+        fields = ['id', 'article', 'quantity']
+        extra_kwargs = {
+            'article': {'allow_blank': False},
+            'quantity': {'min_value': 1},
+        }
+
+
+class StoreExcludedProductSerializer(serializers.ModelSerializer):
+    id = serializers.IntegerField(required=False)
+
+    class Meta:
+        model = StoreExcludedProduct
+        fields = ['id', 'article']
+        extra_kwargs = {
+            'article': {'allow_blank': False},
+        }
+
+
 class StoreFilterSettingsSerializer(serializers.ModelSerializer):
     price_min = serializers.DecimalField(max_digits=12, decimal_places=2, coerce_to_string=False)
     price_max = serializers.DecimalField(max_digits=12, decimal_places=2, coerce_to_string=False)
@@ -247,6 +276,8 @@ class StoreFilterSettingsSerializer(serializers.ModelSerializer):
     specific_weight_threshold = serializers.DecimalField(max_digits=6, decimal_places=4, coerce_to_string=False)
     turnover_from_stock = serializers.DecimalField(max_digits=6, decimal_places=2, coerce_to_string=False)
     store_id = serializers.IntegerField(source='store.id', read_only=True)
+    required_products = StoreRequiredProductSerializer(many=True, required=False)
+    excluded_products = StoreExcludedProductSerializer(many=True, required=False)
 
     class Meta:
         model = StoreFilterSettings
@@ -264,7 +295,48 @@ class StoreFilterSettingsSerializer(serializers.ModelSerializer):
             'sort_by',
             'specific_weight_threshold',
             'turnover_from_stock',
+            'required_products',
+            'excluded_products',
             'created_at',
             'updated_at',
         ]
         read_only_fields = ['id', 'store_id', 'created_at', 'updated_at']
+
+    def _replace_related(self, instance, related_name, data_list, model, defaults):
+        manager = getattr(instance, related_name)
+        manager.all().delete()
+        bulk = []
+        for item in data_list:
+            attrs = defaults(item)
+            attrs['filter_settings'] = instance
+            bulk.append(model(**attrs))
+        model.objects.bulk_create(bulk)
+
+    def update(self, instance, validated_data):
+        required_data = validated_data.pop('required_products', None)
+        excluded_data = validated_data.pop('excluded_products', None)
+
+        instance = super().update(instance, validated_data)
+
+        if required_data is not None:
+            self._replace_related(
+                instance,
+                'required_products',
+                required_data,
+                StoreRequiredProduct,
+                lambda item: {
+                    'article': item['article'].strip(),
+                    'quantity': item.get('quantity') or 1,
+                },
+            )
+
+        if excluded_data is not None:
+            self._replace_related(
+                instance,
+                'excluded_products',
+                excluded_data,
+                StoreExcludedProduct,
+                lambda item: {'article': item['article'].strip()},
+            )
+
+        return instance

@@ -105,3 +105,37 @@ class StoreFilterSettings(models.Model):
     def __str__(self):
         return f"Filters for {self.store}"
 
+
+class StoreRequiredProduct(models.Model):
+    filter_settings = models.ForeignKey(
+        StoreFilterSettings,
+        on_delete=models.CASCADE,
+        related_name='required_products',
+    )
+    article = models.CharField(max_length=255)
+    quantity = models.PositiveIntegerField(default=1)
+
+    class Meta:
+        unique_together = ('filter_settings', 'article')
+        verbose_name = "Store required product"
+        verbose_name_plural = "Store required products"
+
+    def __str__(self):
+        return f"{self.article} x{self.quantity}"
+
+
+class StoreExcludedProduct(models.Model):
+    filter_settings = models.ForeignKey(
+        StoreFilterSettings,
+        on_delete=models.CASCADE,
+        related_name='excluded_products',
+    )
+    article = models.CharField(max_length=255)
+
+    class Meta:
+        unique_together = ('filter_settings', 'article')
+        verbose_name = "Store excluded product"
+        verbose_name_plural = "Store excluded products"
+
+    def __str__(self):
+        return self.article
