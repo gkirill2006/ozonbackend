@@ -2,9 +2,22 @@ import requests
 from celery import shared_task
 from django.utils import timezone
 from users.models import OzonStore
-from .models import (DeliveryCluster, DeliveryClusterItemAnalytics, DeliveryAnalyticsSummary, Category, ProductType,
-                     Product, WarehouseStock, Sale, FbsStock, ProductDailyAnalytics, AdPlanItem,
-                     OzonStore, ManualCampaign, CampaignPerformanceReportEntry)
+from .models import (
+    DeliveryCluster,
+    DeliveryClusterItemAnalytics,
+    DeliveryAnalyticsSummary,
+    Category,
+    ProductType,
+    Product,
+    WarehouseStock,
+    OzonWarehouseDirectory,
+    Sale,
+    FbsStock,
+    ProductDailyAnalytics,
+    AdPlanItem,
+    ManualCampaign,
+    CampaignPerformanceReportEntry,
+)
 
 from .utils import create_cpc_product_campaign, update_campaign_budget, activate_campaign, deactivate_campaign
 
@@ -32,6 +45,92 @@ import logging
 import os
 logger = logging.getLogger(__name__)
 
+
+
+
+@shared_task(name="Синхронизация справочника складов OZON")
+def sync_all_ozon_warehouses():
+    """Обновляем справочник складов/кластеров для всех магазинов."""
+    stores = OzonStore.objects.all()
+    for store in stores:
+        try:
+            logger.info(f"[🏬] Синхронизация складов для {store}")
+            sync_ozon_warehouses_for_store(store)
+            logger.info(f"[✅] Справочник складов обновлен для {store}")
+        except Exception as e:
+            logger.error(f"[❌] Ошибка при обновлении складов {store}: {e}")
+
+
+def sync_ozon_warehouses_for_store(store):
+    clusters = fetch_ozon_clusters(store.client_id, store.api_key)
+
+    updated = 0
+    for cluster in clusters:
+        # Родительский кластер (из ответа clusters[*])
+        cluster_id = cluster.get("id")
+        cluster_name = cluster.get("name", "")
+        cluster_type = cluster.get("type", "")
+        cluster_macrolocal_id = cluster.get("macrolocal_cluster_id")
+
+        if cluster_id is None:
+            logger.warning(f"[ℹ️] Пропуск кластера без id для магазина {store}")
+            continue
+
+        logistic_clusters = cluster.get("logistic_clusters", [])
+        # На некоторых аккаунтах склады могут приходить прямо в cluster["warehouses"]
+        if not logistic_clusters and cluster.get("warehouses"):
+            logistic_clusters = [cluster]
+
+        for logistic_cluster in logistic_clusters:
+            for warehouse in logistic_cluster.get("warehouses", []):
+                warehouse_id = warehouse.get("warehouse_id")
+                if warehouse_id is None:
+                    continue
+
+                OzonWarehouseDirectory.objects.update_or_create(
+                    store=store,
+                    warehouse_id=warehouse_id,
+                    defaults={
+                        "warehouse_type": warehouse.get("type", ""),
+                        "name": warehouse.get("name", ""),
+                        # Привязываем к родительскому кластеру
+                        "logistic_cluster_id": cluster_id,
+                        "logistic_cluster_name": cluster_name,
+                        "logistic_cluster_type": cluster_type,
+                        "macrolocal_cluster_id": cluster_macrolocal_id,
+                    },
+                )
+                updated += 1
+
+    logger.info(f"[📦] Обновлено {updated} складов для {store}")
+
+
+def fetch_ozon_clusters(client_id, api_key):
+    url = "https://api-seller.ozon.ru/v1/cluster/list"
+    headers = {
+        "Client-Id": client_id,
+        "Api-Key": api_key,
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "cluster_type": "CLUSTER_TYPE_OZON"
+    }
+
+    resp = requests.post(url, headers=headers, json=payload)
+    if resp.status_code != 200:
+        raise Exception(f"Ozon API error: {resp.status_code} {resp.text}")
+
+    data = resp.json() or {}
+    # API может возвращать кластеры как в корне, так и в result.clusters
+    clusters = data.get("clusters")
+    if clusters is None:
+        clusters = data.get("result", {}).get("clusters", [])
+
+    if not isinstance(clusters, list):
+        clusters = []
+
+    return clusters
 
 
 

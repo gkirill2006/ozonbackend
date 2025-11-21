@@ -3,9 +3,23 @@ from django.contrib.admin.filters import DateFieldListFilter
 from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
 from datetime import timedelta, date as dt_date
-from .models import (Product, WarehouseStock, Sale, FbsStock, Category, DeliveryCluster, DeliveryClusterItemAnalytics,
-                     DeliveryAnalyticsSummary, ProductDailyAnalytics, AdPlanItem, ManualCampaign, CampaignPerformanceReport, CampaignPerformanceReportEntry,
-                     StoreAdControl)
+from .models import (
+    Product,
+    WarehouseStock,
+    OzonWarehouseDirectory,
+    Sale,
+    FbsStock,
+    Category,
+    DeliveryCluster,
+    DeliveryClusterItemAnalytics,
+    DeliveryAnalyticsSummary,
+    ProductDailyAnalytics,
+    AdPlanItem,
+    ManualCampaign,
+    CampaignPerformanceReport,
+    CampaignPerformanceReportEntry,
+    StoreAdControl,
+)
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
@@ -48,6 +62,36 @@ class WarehouseStockAdmin(admin.ModelAdmin):
     search_fields = ('product__name', 'sku', 'warehouse_id', "cluster_name")
     list_filter = ('warehouse_name', 'cluster_name', 'store', 'warehouse_id')
     readonly_fields = ('updated_at',)
+
+
+@admin.register(OzonWarehouseDirectory)
+class OzonWarehouseDirectoryAdmin(admin.ModelAdmin):
+    list_display = (
+        'store',
+        'warehouse_id',
+        'name',
+        'warehouse_type',
+        'logistic_cluster_id',
+        'logistic_cluster_name',
+        'logistic_cluster_type',
+        'macrolocal_cluster_id',
+        'created_at',
+        'updated_at',
+    )
+    list_filter = (
+        'store',
+        'warehouse_type',
+        'name',
+        'logistic_cluster_name'
+    )
+    search_fields = (
+        'warehouse_id',
+        'name',
+        'logistic_cluster_id',
+        'logistic_cluster_name',
+    )
+    readonly_fields = ('created_at', 'updated_at')
+    ordering = ('store', 'logistic_cluster_id', 'warehouse_id')
     
 @admin.register(Sale)
 class SaleAdmin(admin.ModelAdmin):

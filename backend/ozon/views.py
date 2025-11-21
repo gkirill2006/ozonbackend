@@ -1600,3 +1600,65 @@ class Planer_View(APIView):
         })
         resp["X-Execution-Time-s"] = f"{execution_time:.3f}"
         return resp
+
+
+class PlanerPivotView(Planer_View):
+    """
+    Альтернативный формат планнера: строки по товарам, столбцы по кластерам.
+    """
+    def post(self, request):
+        base_response = super().post(request)
+        if base_response.status_code != status.HTTP_200_OK:
+            # Пробрасываем ошибки как есть
+            return base_response
+
+        data = base_response.data or {}
+        clusters = data.get("clusters", [])
+        summary = data.get("summary", [])
+
+        cluster_order = [c.get("cluster_name") for c in clusters]
+
+        # Собираем метаданные и распределение по кластерам
+        product_meta = {}
+        per_offer_cluster_qty = defaultdict(lambda: defaultdict(int))
+        for cluster in clusters:
+            cluster_name = cluster.get("cluster_name")
+            for p in cluster.get("products", []):
+                offer_id = p.get("offer_id")
+                per_offer_cluster_qty[offer_id][cluster_name] = p.get("for_delivery", 0)
+                if offer_id not in product_meta:
+                    product_meta[offer_id] = {
+                        "sku": p.get("sku"),
+                        "name": p.get("name"),
+                        "barcodes": p.get("barcodes"),
+                        "photo": p.get("photo"),
+                        "ozon_link": p.get("ozon_link"),
+                    }
+
+        # Формируем строки в порядке summary (отсортировано по total_for_delivery)
+        rows = []
+        for item in summary:
+            offer_id = item.get("offer_id")
+            meta = product_meta.get(offer_id, {})
+            rows.append({
+                "offer_id": offer_id,
+                "sku": meta.get("sku"),
+                "name": meta.get("name"),
+                "barcode": item.get("barcode") or (meta.get("barcodes") or [None])[0],
+                "photo": meta.get("photo"),
+                "ozon_link": meta.get("ozon_link"),
+                "total_for_delivery": item.get("total_for_delivery", 0),
+                "clusters": {
+                    name: per_offer_cluster_qty.get(offer_id, {}).get(name, 0)
+                    for name in cluster_order
+                },
+            })
+
+        resp = Response({
+            "cluster_headers": cluster_order,
+            "products": rows,
+            "execution_time_seconds": data.get("execution_time_seconds"),
+            "average_delivery_time": data.get("average_delivery_time"),
+        })
+        resp["X-Execution-Time-s"] = base_response.headers.get("X-Execution-Time-s")
+        return resp

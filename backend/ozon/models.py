@@ -88,6 +88,34 @@ class WarehouseStock(models.Model):
     def __str__(self):
         return f"{self.warehouse_name} / SKU {self.sku} / {self.available_stock_count} шт."
 
+# Справочник складов/кластеров OZON
+class OzonWarehouseDirectory(models.Model):
+    store = models.ForeignKey(OzonStore, on_delete=models.CASCADE, related_name="ozon_warehouses")
+
+    warehouse_id = models.BigIntegerField()
+    warehouse_type = models.CharField(max_length=50)
+    name = models.CharField(max_length=255)
+
+    logistic_cluster_id = models.BigIntegerField()
+    logistic_cluster_name = models.CharField(max_length=255)
+    logistic_cluster_type = models.CharField(max_length=50)
+    macrolocal_cluster_id = models.BigIntegerField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("store", "warehouse_id")
+        indexes = [
+            models.Index(fields=["store", "warehouse_id"]),
+            models.Index(fields=["logistic_cluster_id"]),
+        ]
+        verbose_name = "Склад OZON"
+        verbose_name_plural = "Справочник складов OZON"
+
+    def __str__(self):
+        return f"{self.name} ({self.warehouse_id}) — {self.logistic_cluster_name}"
+
 # Модель для хранения продаж FBS+FBO
 class Sale(models.Model):
     FBO = 'FBO'
