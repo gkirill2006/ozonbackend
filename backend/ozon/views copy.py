@@ -324,8 +324,12 @@ class ProductAnalytics_V2_View(APIView):
         except OzonStore.DoesNotExist:
             return Response({"error": "Invalid Api-Key"}, status=403)
 
-        since_date = timezone.now() - timedelta(days=days-1)
-        since_date = since_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        # since_date = timezone.now() - timedelta(days=days)
+        # Берём начало суток (локальных) за выбранный период.
+        # Для days=7 и текущей дате 2025-11-24 13:41 получим 2025-11-18 00:00.
+        start_date = timezone.localdate() - timedelta(days=days - 1)        
+        since_date = timezone.make_aware(datetime.combine(start_date, datetime.min.time()), timezone.get_current_timezone())        
+        # since_date = since_date.replace(hour=0, minute=0, second=0, microsecond=0)
         # Все товары
         products = Product.objects.filter(
             store=ozon_store,
@@ -347,9 +351,18 @@ class ProductAnalytics_V2_View(APIView):
         logging.info(f"Дата до которой смотрим {since_date}")
         sales = Sale.objects.filter(store=ozon_store, date__gte=since_date, sale_type__in=[Sale.FBO, Sale.FBS])
         sales_by_cluster = {}
+        # Кэш справочника складов по warehouse_id -> cluster name
+        warehouse_cluster_map = {
+            w.warehouse_id: w.logistic_cluster_name
+            for w in OzonWarehouseDirectory.objects.filter(store=ozon_store)
+        }
         logging.info(f"Кол-во продаж {len(sales)}")
         for s in sales:
-            cluster = s.cluster_to or "Без кластера"
+            cluster = (
+                warehouse_cluster_map.get(s.warehouse_id)
+                or s.cluster_to
+                or "Без кластера"
+            )
             sales_by_cluster.setdefault(cluster, {})
             sales_by_cluster[cluster].setdefault(s.sku, {"qty": 0, "price": 0})
             sales_by_cluster[cluster][s.sku]["qty"] += s.quantity
@@ -374,7 +387,11 @@ class ProductAnalytics_V2_View(APIView):
         logging.info(f"Остатки товаров по складам  {len(stocks)}")
         
         for stock in stocks:
-            cluster = stock.cluster_name or "Без кластера"
+            cluster = (
+                warehouse_cluster_map.get(stock.warehouse_id)
+                or stock.cluster_name
+                or "Без кластера"
+            )
             stock_sum = (
                 stock.available_stock_count +
                 stock.valid_stock_count +
@@ -759,7 +776,7 @@ class ProductAnalyticsByItemView(APIView):
         except OzonStore.DoesNotExist:
             return Response({"error": "Invalid Api-Key"}, status=403)
 
-        since_date = timezone.now() - timedelta(days=days-1)
+        since_date = timezone.now() - timedelta(days=days)
         since_date = since_date.replace(hour=0, minute=0, second=0, microsecond=0)
 
         products = Product.objects.filter(store=store)
@@ -769,8 +786,17 @@ class ProductAnalyticsByItemView(APIView):
         sales_by_sku_cluster = defaultdict(lambda: defaultdict(lambda: {"qty": 0, "price": 0}))
         revenue_by_cluster = defaultdict(float)
 
+        warehouse_cluster_map = {
+            w.warehouse_id: w.logistic_cluster_name
+            for w in OzonWarehouseDirectory.objects.filter(store=store)
+        }
+
         for s in sales:
-            cluster = s.cluster_to or "Без кластера"
+            cluster = (
+                warehouse_cluster_map.get(s.warehouse_id)
+                or s.cluster_to
+                or "Без кластера"
+            )
             sales_by_sku_cluster[s.sku][cluster]["qty"] += s.quantity
             sales_by_sku_cluster[s.sku][cluster]["price"] += float(s.price) * s.quantity
             revenue_by_cluster[cluster] += float(s.price) * s.quantity
@@ -780,7 +806,11 @@ class ProductAnalyticsByItemView(APIView):
         total_stock_by_sku = defaultdict(int)
 
         for stock in stocks:
-            cluster = stock.cluster_name or "Без кластера"
+            cluster = (
+                warehouse_cluster_map.get(stock.warehouse_id)
+                or stock.cluster_name
+                or "Без кластера"
+            )
             stock_sum = stock.available_stock_count + stock.transit_stock_count + stock.return_from_customer_stock_count
             stocks_by_sku_cluster[stock.sku][cluster] += stock_sum
             total_stock_by_sku[stock.sku] += stock_sum
@@ -1209,7 +1239,7 @@ class Planer_View(APIView):
         if price_max < price_min:
             return Response({"error": "Минимальная цена не может быть больше максимальной"}, status=400)
 
-        since_date = timezone.now() - timedelta(days=days-1)
+        since_date = timezone.now() - timedelta(days=days)
         since_date = since_date.replace(hour=0, minute=0, second=0, microsecond=0)
         # Все товары
         products = Product.objects.filter(
@@ -1232,9 +1262,17 @@ class Planer_View(APIView):
         logging.info(f"Дата до которой смотрим {since_date}")
         sales = Sale.objects.filter(store=ozon_store, date__gte=since_date, sale_type__in=[Sale.FBO, Sale.FBS])
         sales_by_cluster = {}
+        warehouse_cluster_map = {
+            w.warehouse_id: w.logistic_cluster_name
+            for w in OzonWarehouseDirectory.objects.filter(store=ozon_store)
+        }
         logging.info(f"Кол-во продаж {len(sales)}")
         for s in sales:
-            cluster = s.cluster_to or "Без кластера"
+            cluster = (
+                warehouse_cluster_map.get(s.warehouse_id)
+                or s.cluster_to
+                or "Без кластера"
+            )
             sales_by_cluster.setdefault(cluster, {})
             sales_by_cluster[cluster].setdefault(s.sku, {"qty": 0, "price": 0})
             sales_by_cluster[cluster][s.sku]["qty"] += s.quantity
@@ -1259,7 +1297,11 @@ class Planer_View(APIView):
         logging.info(f"Остатки товаров по складам  {len(stocks)}")
         
         for stock in stocks:
-            cluster = stock.cluster_name or "Без кластера"
+            cluster = (
+                warehouse_cluster_map.get(stock.warehouse_id)
+                or stock.cluster_name
+                or "Без кластера"
+            )
             stock_sum = (
                 stock.available_stock_count +
                 stock.valid_stock_count +

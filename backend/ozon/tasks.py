@@ -397,34 +397,7 @@ def sync_sales_for_store(store, days):
     fbo_sales = fetch_fbo_sales(store.client_id, store.api_key, days)
     fbs_sales = fetch_fbs_sales(store.client_id, store.api_key, days)
 
-    total_created = 0
-    total_updated = 0
-
-    for sale_data in fbo_sales + fbs_sales:
-        obj, created = Sale.objects.update_or_create(
-            posting_number=sale_data["posting_number"],
-            sku=sale_data["sku"],
-            sale_type=sale_data["sale_type"],
-            defaults={
-                "store": store,
-                "date": sale_data["date"],
-                "price": sale_data["price"],
-                "quantity": sale_data["quantity"],
-                "payout": sale_data["payout"],
-                "commission_amount": sale_data["commission_amount"],
-                "warehouse_id": sale_data["warehouse_id"],
-                "cluster_from": sale_data["cluster_from"],
-                "cluster_to": sale_data["cluster_to"],
-                "status": sale_data["status"],
-                "customer_price": sale_data.get("customer_price"),
-                "tpl_provider": sale_data.get("tpl_provider"),
-            }
-        )
-        if created:
-            total_created += 1
-        else:
-            total_updated += 1
-
+    total_created, total_updated = _bulk_upsert_sales(store, fbo_sales + fbs_sales)
     logger.info(f"[📈] Продаж создано: {total_created}, обновлено: {total_updated} для {store}")
 
 # Синхронизация остатков FBS        
@@ -472,6 +445,92 @@ def _sync_fbs_stock_for_store(store):
     FbsStock.objects.bulk_create(stock_objects)
     logger.info(f"[📦] Сохранено {len(stock_objects)} FBS-остатков для {store}")
 
+
+def _bulk_upsert_sales(store, sales_payload, batch_size=5000):
+    """
+    Быстрый upsert продаж: минимизируем число запросов.
+    Ключ для upsert: (posting_number, sku, sale_type) внутри одного магазина.
+    """
+    if not sales_payload:
+        return 0, 0
+
+    # Собираем ключи и список posting_number для выборки существующих
+    posting_numbers = set()
+    for s in sales_payload:
+        key = (s["posting_number"], s["sku"], s["sale_type"])
+        posting_numbers.add(s["posting_number"])
+
+    existing = {
+        (obj.posting_number, obj.sku, obj.sale_type): obj
+        for obj in Sale.objects.filter(store=store, posting_number__in=posting_numbers)
+    }
+
+    to_create = []
+    to_update = []
+
+    for s in sales_payload:
+        key = (s["posting_number"], s["sku"], s["sale_type"])
+        if key in existing:
+            obj = existing[key]
+            obj.date = s["date"]
+            obj.price = s["price"]
+            obj.quantity = s["quantity"]
+            obj.payout = s["payout"]
+            obj.commission_amount = s["commission_amount"]
+            obj.warehouse_id = s["warehouse_id"]
+            obj.cluster_from = s["cluster_from"]
+            obj.cluster_to = s["cluster_to"]
+            obj.status = s["status"]
+            obj.customer_price = s.get("customer_price")
+            obj.tpl_provider = s.get("tpl_provider")
+            to_update.append(obj)
+        else:
+            to_create.append(
+                Sale(
+                    store=store,
+                    sale_type=s["sale_type"],
+                    posting_number=s["posting_number"],
+                    sku=s["sku"],
+                    date=s["date"],
+                    price=s["price"],
+                    quantity=s["quantity"],
+                    payout=s["payout"],
+                    commission_amount=s["commission_amount"],
+                    warehouse_id=s["warehouse_id"],
+                    cluster_from=s["cluster_from"],
+                    cluster_to=s["cluster_to"],
+                    status=s["status"],
+                    customer_price=s.get("customer_price"),
+                    tpl_provider=s.get("tpl_provider"),
+                )
+            )
+
+    created = len(to_create)
+    updated = len(to_update)
+
+    with transaction.atomic():
+        if to_create:
+            Sale.objects.bulk_create(to_create, batch_size=batch_size)
+        if to_update:
+            Sale.objects.bulk_update(
+                to_update,
+                [
+                    "date",
+                    "price",
+                    "quantity",
+                    "payout",
+                    "commission_amount",
+                    "warehouse_id",
+                    "cluster_from",
+                    "cluster_to",
+                    "status",
+                    "customer_price",
+                    "tpl_provider",
+                ],
+                batch_size=batch_size,
+            )
+
+    return created, updated
 
 
 def fetch_detailed_products_from_ozon(client_id, api_key, product_ids):
