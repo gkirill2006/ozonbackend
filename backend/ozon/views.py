@@ -31,6 +31,7 @@ from .tasks import (
 )
 
 import logging
+import requests
 # Наполянем модель товароми
 class SyncOzonProductView(APIView):
     def post(self, request):
@@ -234,6 +235,59 @@ class SyncOzonSalesView(APIView):
             "created": total_created,
             "status_updated": total_updated
         })
+
+
+class OzonFboWarehouseSearchView(APIView):
+    """
+    Поиск точек отгрузки FBO (https://api-seller.ozon.ru/v1/warehouse/fbo/list).
+    Принимает:
+      - Api-Key, client_id
+      - filter_by_supply_type (список или строка) опционально
+      - search (строка) опционально
+    Возвращает поле "search" из ответа Ozon.
+    """
+
+    def post(self, request):
+        api_key = request.data.get("Api-Key")
+        client_id = request.data.get("client_id")
+        filter_by_supply_type = request.data.get("filter_by_supply_type") or []
+        search_query = request.data.get("search", "")
+
+        if not api_key:
+            return Response({"error": "Missing Api-Key"}, status=400)
+
+        try:
+            OzonStore.objects.get(api_key=api_key, client_id=client_id)
+        except OzonStore.DoesNotExist:
+            return Response({"error": "Invalid Api-Key"}, status=403)
+
+        if isinstance(filter_by_supply_type, str):
+            filter_by_supply_type = [filter_by_supply_type]
+
+        payload = {
+            "filter_by_supply_type": filter_by_supply_type,
+            "search": search_query,
+        }
+
+        headers = {
+            "Client-Id": client_id,
+            "Api-Key": api_key,
+            "Content-Type": "application/json",
+        }
+
+        try:
+            resp = requests.post(
+                "https://api-seller.ozon.ru/v1/warehouse/fbo/list",
+                json=payload,
+                headers=headers,
+                timeout=30,
+            )
+            resp.raise_for_status()
+        except requests.RequestException as e:
+            return Response({"error": f"Ozon API error: {e}"}, status=500)
+
+        data = resp.json() or {}
+        return Response({"search": data.get("search", [])})
 
 #Получение остатков FBS
 # Синхронизация остатков FBS        

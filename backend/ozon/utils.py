@@ -455,11 +455,11 @@ def create_cpc_product_campaign(
         "Accept": "application/json",
     }
 
+    # Параметр autoIncreasePercent более не принимается API (отключён 29.10.2025)
     payload = {
         "title": campaign_name,
         "placement": placement,
         "productAutopilotStrategy": product_autopilot_strategy,
-        "autoIncreasePercent": 0,
         "weeklyBudget": _rub_to_micros(weekly_budget_rub),
     }
 
@@ -587,8 +587,7 @@ def update_campaign_budget(
     if to_date is not None:
         payload["toDate"] = to_date
     
-    if auto_increase_percent is not None:
-        payload["autoIncreasePercent"] = auto_increase_percent
+    # autoIncreasePercent удалён в API (Ozon, 29.10.2025), поэтому не отправляем
     
     if not payload:
         raise ValueError("Необходимо указать хотя бы один параметр для обновления")
@@ -761,5 +760,3 @@ def deactivate_campaign_for_store(store: OzonStore, campaign_id: str):
         raise Exception("Не удалось получить access_token для магазина")
     
     return deactivate_campaign(access_token=access_token, campaign_id=campaign_id)
-
-

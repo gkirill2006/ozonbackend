@@ -15,6 +15,7 @@ from .views import (
     UpdateWarehouseStockView,
     Planer_View,
     PlanerPivotView,
+    OzonFboWarehouseSearchView,
 )
 urlpatterns = [
     path('ozon/products/', SyncOzonProductView.as_view()),
@@ -33,5 +34,6 @@ urlpatterns = [
     path("ozon/warehouse/update/", UpdateWarehouseStockView.as_view()),
     path("ozon/planner/", Planer_View.as_view(), name="ozon-planner"),
     path("ozon/planner/pivot/", PlanerPivotView.as_view(), name="ozon-planner-pivot"),
+    path("ozon/warehouse/fbo/search/", OzonFboWarehouseSearchView.as_view()),
 
 ]

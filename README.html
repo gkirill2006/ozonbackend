@@ -208,3 +208,9 @@
     
   
     </body></html>
+
+from ozon.tasks import create_or_update_AD
+from users.models import OzonStore
+
+store = OzonStore.objects.get(name="spstore")  
+create_or_update_AD(spreadsheet_url=store.google_sheet_url)

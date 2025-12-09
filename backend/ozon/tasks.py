@@ -3595,6 +3595,16 @@ def create_or_update_AD(spreadsheet_url: str = None, sa_json_path: str = None, w
         # Получаем токен один раз для всех операций
         from .utils import get_store_performance_token
         try:
+            # Пропускаем, если для магазина выключена рекламная система
+            try:
+                from .models import StoreAdControl
+                control = StoreAdControl.objects.filter(store=store).first()
+                if control and not control.is_system_enabled:
+                    logger.info(f"[⛔] Рекламная система для {store} выключена. create_or_update_AD завершается без изменений.")
+                    return data_rows
+            except Exception as ctrl_err:
+                logger.warning(f"[⚠️] Не удалось проверить StoreAdControl для {store}: {ctrl_err}")
+
             token_info = get_store_performance_token(store)
             access_token = token_info.get("access_token")
             if not access_token:
@@ -3954,7 +3964,7 @@ def create_or_update_AD(spreadsheet_url: str = None, sa_json_path: str = None, w
 # =============================
 # Запускается в периодик таске раз в час 
 # 1. Проверяет ячейку B -включена компнаия или нет
-# проверяет в БД не изменилось ли значение, и в лучае изменения останавливает или запускает компанию в Озоне
+# проверяет в БД не изменилось ли значение, и в случае изменения останавливает или запускает компанию в Озоне
 
 # 2. Проверяет ячейку K -Бюджет на нед, РУЧНОЙ
 # Если задан ручной бюджет, то проверяет в моделе был ли задан ручной бюджет ранее и если есть изменения, 
@@ -4052,7 +4062,7 @@ def sync_campaign_activity_with_sheets(
         spreadsheet = client.open_by_url(spreadsheet_url)
         ws = spreadsheet.worksheet(worksheet_name)
         
-        # Получаем название магазина из ячейки T23
+        # Получаем название магазина из ячейки V23
         try:
             store_name = ws.acell('V23').value
             if not store_name or store_name.strip() == "":
