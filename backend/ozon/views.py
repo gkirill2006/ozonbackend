@@ -1,21 +1,32 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import permissions, status
-from users.models import User, OzonStore, StoreFilterSettings
+from rest_framework import generics, permissions, status
+from django.shortcuts import get_object_or_404
+from users.models import User, OzonStore, StoreFilterSettings, StoreAccess
 from .models import (
     Product,
     Category,
     ProductType,
     WarehouseStock,
     OzonWarehouseDirectory,
+    OzonSupplyBatch,
+    OzonSupplyDraft,
     Sale,
     FbsStock,
     DeliveryCluster,
     DeliveryClusterItemAnalytics,
     DeliveryAnalyticsSummary,
 )
-from .utils import (fetch_all_products_from_ozon, fetch_detailed_products_from_ozon, fetch_and_save_category_tree, fetch_warehouse_stock,
-                    fetch_fbs_sales, fetch_fbo_sales, fetch_fbs_stocks)
+from .utils import (
+    fetch_all_products_from_ozon,
+    fetch_detailed_products_from_ozon,
+    fetch_and_save_category_tree,
+    fetch_warehouse_stock,
+    fetch_fbs_sales,
+    fetch_fbo_sales,
+    fetch_fbs_stocks,
+)
+from .serializers import DraftCreateSerializer, SupplyBatchStatusSerializer
 import time
 from django.db.models import Sum, F, Count, Q
 from datetime import datetime, timedelta
@@ -32,6 +43,18 @@ from .tasks import (
 
 import logging
 import requests
+
+
+def user_store_queryset(user):
+    """
+    Магазины, доступные пользователю: свои и те, куда его пригласили.
+    """
+    return (
+        OzonStore.objects.filter(
+            Q(user=user) | Q(accesses__user=user, accesses__status=StoreAccess.STATUS_ACCEPTED)
+        )
+        .distinct()
+    )
 # Наполянем модель товароми
 class SyncOzonProductView(APIView):
     def post(self, request):
@@ -241,25 +264,31 @@ class OzonFboWarehouseSearchView(APIView):
     """
     Поиск точек отгрузки FBO (https://api-seller.ozon.ru/v1/warehouse/fbo/list).
     Принимает:
-      - Api-Key, client_id
+      - store_id (если у пользователя несколько магазинов; если один — берём его)
       - filter_by_supply_type (список или строка) опционально
       - search (строка) опционально
     Возвращает поле "search" из ответа Ozon.
     """
 
+    permission_classes = [permissions.IsAuthenticated]
+
     def post(self, request):
-        api_key = request.data.get("Api-Key")
-        client_id = request.data.get("client_id")
+        store_id = request.data.get("store_id")
         filter_by_supply_type = request.data.get("filter_by_supply_type") or []
         search_query = request.data.get("search", "")
 
-        if not api_key:
-            return Response({"error": "Missing Api-Key"}, status=400)
-
-        try:
-            OzonStore.objects.get(api_key=api_key, client_id=client_id)
-        except OzonStore.DoesNotExist:
-            return Response({"error": "Invalid Api-Key"}, status=403)
+        stores_qs = user_store_queryset(request.user)
+        if store_id:
+            store = stores_qs.filter(id=store_id).first()
+            if not store:
+                return Response({"error": "Store not found or not accessible"}, status=404)
+        else:
+            count = stores_qs.count()
+            if count == 0:
+                return Response({"error": "No stores available"}, status=404)
+            if count > 1:
+                return Response({"error": "Specify store_id"}, status=400)
+            store = stores_qs.first()
 
         if isinstance(filter_by_supply_type, str):
             filter_by_supply_type = [filter_by_supply_type]
@@ -270,8 +299,8 @@ class OzonFboWarehouseSearchView(APIView):
         }
 
         headers = {
-            "Client-Id": client_id,
-            "Api-Key": api_key,
+            "Client-Id": store.client_id,
+            "Api-Key": store.api_key,
             "Content-Type": "application/json",
         }
 
@@ -340,8 +369,444 @@ class SyncFbsStockView(APIView):
 
         return Response({"status": "ok", "stocks_saved": created})
 
-# Получение конечной аналитики по продуктам
+# Создание черновиков поставок (по одному на кластер)
+class CreateSupplyDraftView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
 
+    def post(self, request):
+        serializer = DraftCreateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = serializer.validated_data
+        store_id = data["store_id"]
+        store = get_object_or_404(user_store_queryset(request.user), id=store_id)
+
+        destination = data["destinationWarehouse"]
+        supply_type = data["supplyType"]
+
+        last_seq = OzonSupplyBatch.objects.filter(store=store).order_by("-batch_seq").first()
+        next_seq = (last_seq.batch_seq + 1) if last_seq else 1
+        batch = OzonSupplyBatch.objects.create(
+            store=store,
+            batch_seq=next_seq,
+            supply_type=supply_type,
+            drop_off_point_warehouse_id=destination["warehouse_id"],
+            drop_off_point_name=destination.get("name", ""),
+            status="queued",
+        )
+
+        for shipment in data["shipments"]:
+            cluster_name = shipment["warehouse"]
+            cluster = OzonWarehouseDirectory.objects.filter(
+                store=store,
+                logistic_cluster_name__iexact=cluster_name,
+            ).first()
+            if not cluster:
+                continue
+
+            items = [
+                {"sku": item["sku"], "quantity": item["quantity"]}
+                for item in shipment["items"]
+                if item["quantity"] > 0
+            ]
+            if not items:
+                continue
+
+            payload = {
+                "cluster_ids": [str(cluster.logistic_cluster_id)],
+                "drop_off_point_warehouse_id": destination["warehouse_id"],
+                "items": items,
+                "type": supply_type,
+            }
+
+            OzonSupplyDraft.objects.create(
+                batch=batch,
+                store=store,
+                supply_type=supply_type,
+                logistic_cluster_id=cluster.logistic_cluster_id,
+                logistic_cluster_name=cluster.logistic_cluster_name,
+                drop_off_point_warehouse_id=destination["warehouse_id"],
+                drop_off_point_name=destination.get("name", ""),
+                request_payload=payload,
+                status="queued",
+            )
+
+        try:
+            from .tasks import process_supply_batch
+            process_supply_batch.delay(str(batch.batch_id))
+            batch.status = "processing"
+            batch.save(update_fields=["status", "updated_at"])
+        except Exception as exc:
+            logging.error(f"Не удалось запустить задачу создания черновиков: {exc}")
+
+        drafts_data = [
+            {
+                "draft_id": d.id,
+                "warehouse": d.logistic_cluster_name,
+                "cluster_id": d.logistic_cluster_id,
+                "status": d.status,
+            }
+            for d in batch.drafts.all()
+        ]
+
+        return Response(
+            {
+                "batch_id": str(batch.batch_id),
+                "batch_seq": batch.batch_seq,
+                "store_id": store.id,
+                "drop_off_point_warehouse_id": batch.drop_off_point_warehouse_id,
+                "drafts": drafts_data,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+
+class SupplyDraftBatchStatusView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, batch_id: str):
+        store_qs = user_store_queryset(request.user)
+        batch = get_object_or_404(OzonSupplyBatch, batch_id=batch_id, store__in=store_qs)
+
+        serializer = SupplyBatchStatusSerializer(batch)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class SupplyDraftBatchListView(generics.ListAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = SupplyBatchStatusSerializer
+
+    def get_queryset(self):
+        store_qs = user_store_queryset(self.request.user)
+        qs = (
+            OzonSupplyBatch.objects
+            .filter(store__in=store_qs)
+            .prefetch_related("drafts")
+            .order_by("-created_at")
+        )
+        store_id = self.request.query_params.get("store_id")
+        if store_id:
+            qs = qs.filter(store_id=store_id)
+        return qs
+
+
+class SupplyDraftSelectWarehouseView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def _normalize(self, draft):
+        data = draft.supply_warehouse or []
+        flat = []
+        for entry in data:
+            if isinstance(entry, dict) and entry.get("warehouse_id"):
+                flat.append(entry)
+            elif isinstance(entry, dict) and "warehouses" in entry:
+                for w in entry.get("warehouses", []):
+                    sw = w.get("supply_warehouse") or {}
+                    if sw.get("warehouse_id"):
+                        flat.append({
+                            **sw,
+                            "status": w.get("status"),
+                            "bundle_ids": w.get("bundle_ids"),
+                            "travel_time_days": w.get("travel_time_days"),
+                        })
+        if flat:
+            draft.supply_warehouse = flat
+            if not draft.selected_supply_warehouse:
+                draft.selected_supply_warehouse = flat[0]
+            draft.save(update_fields=["supply_warehouse", "selected_supply_warehouse", "updated_at"])
+        return flat
+
+    def post(self, request, draft_id: int):
+        warehouse_id = request.data.get("warehouse_id")
+        if not warehouse_id:
+            return Response({"error": "warehouse_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        draft = get_object_or_404(
+            OzonSupplyDraft,
+            id=draft_id,
+            store__in=user_store_queryset(request.user),
+        )
+
+        warehouses = self._normalize(draft)
+        selected = None
+        for w in warehouses:
+            wid = w.get("warehouse_id") or w.get("id")
+            if wid and str(wid) == str(warehouse_id):
+                selected = w
+                break
+
+        if not selected:
+            return Response({"error": "warehouse_id not found in supply_warehouse"}, status=status.HTTP_400_BAD_REQUEST)
+
+        draft.selected_supply_warehouse = selected
+        draft.save(update_fields=["selected_supply_warehouse", "updated_at"])
+
+        return Response({
+            "draft_id": draft.id,
+            "selected_supply_warehouse": draft.selected_supply_warehouse,
+        }, status=status.HTTP_200_OK)
+
+
+class SupplyDraftDeleteView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def delete(self, request, draft_id: int):
+        draft = get_object_or_404(
+            OzonSupplyDraft,
+            id=draft_id,
+            store__in=user_store_queryset(request.user),
+        )
+
+        batch = draft.batch
+        draft.delete()
+
+        # если в батче не осталось черновиков — удаляем батч
+        if not batch.drafts.exists():
+            batch.delete()
+            return Response({"deleted": True, "batch_deleted": True}, status=status.HTTP_200_OK)
+
+        return Response({"deleted": True, "batch_deleted": False}, status=status.HTTP_200_OK)
+
+
+class SupplyDraftTimeslotFetchView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    OZON_TIMESLOT_URL = "https://api-seller.ozon.ru/v1/draft/timeslot/info"
+
+    @staticmethod
+    def _normalize(draft: OzonSupplyDraft):
+        data = draft.supply_warehouse or []
+        flat = []
+        for entry in data:
+            if isinstance(entry, dict) and entry.get("warehouse_id"):
+                flat.append(entry)
+            elif isinstance(entry, dict) and "warehouses" in entry:
+                for w in entry.get("warehouses", []):
+                    sw = w.get("supply_warehouse") or {}
+                    if sw.get("warehouse_id"):
+                        flat.append({
+                            **sw,
+                            "status": w.get("status"),
+                            "bundle_ids": w.get("bundle_ids"),
+                            "travel_time_days": w.get("travel_time_days"),
+                        })
+        if flat:
+            draft.supply_warehouse = flat
+            if not draft.selected_supply_warehouse:
+                draft.selected_supply_warehouse = flat[0]
+            draft.save(update_fields=["supply_warehouse", "selected_supply_warehouse", "updated_at"])
+        return flat
+
+    def post(self, request):
+        batch_id = request.data.get("batch_id")
+        date_from = request.data.get("date_from")
+        days = request.data.get("days")
+        if not batch_id or not date_from or days is None:
+            return Response({"error": "batch_id, date_from, days are required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            days = int(days)
+        except (TypeError, ValueError):
+            return Response({"error": "days must be integer"}, status=status.HTTP_400_BAD_REQUEST)
+
+        batch = get_object_or_404(
+            OzonSupplyBatch,
+            batch_id=batch_id,
+            store__in=user_store_queryset(request.user),
+        )
+
+        try:
+            dt_from = datetime.fromisoformat(str(date_from).replace("Z", "+00:00"))
+        except Exception:
+            return Response({"error": "Invalid date_from format"}, status=status.HTTP_400_BAD_REQUEST)
+
+        dt_to = dt_from + timedelta(days=days)
+        date_from_iso = dt_from.isoformat().replace("+00:00", "Z")
+        date_to_iso = dt_to.isoformat().replace("+00:00", "Z")
+
+        results = []
+        errors = []
+
+        for draft in batch.drafts.all():
+            if not draft.draft_id:
+                errors.append({"draft_id": draft.id, "error": "draft_id missing (info not loaded)"})
+                continue
+
+            warehouses = self._normalize(draft)
+            warehouse = draft.selected_supply_warehouse or (warehouses[0] if warehouses else None)
+            if not warehouse:
+                errors.append({"draft_id": draft.id, "error": "No warehouse selected"})
+                continue
+            warehouse_id = warehouse.get("warehouse_id") or warehouse.get("id")
+            if not warehouse_id:
+                errors.append({"draft_id": draft.id, "error": "warehouse_id missing"})
+                continue
+
+            payload = {
+                "date_from": date_from_iso,
+                "date_to": date_to_iso,
+                "draft_id": draft.draft_id,
+                "warehouse_ids": [str(warehouse_id)],
+            }
+            headers = {
+                "Client-Id": draft.store.client_id,
+                "Api-Key": draft.store.api_key,
+                "Content-Type": "application/json",
+            }
+            try:
+                resp = requests.post(self.OZON_TIMESLOT_URL, headers=headers, json=payload, timeout=30)
+            except requests.RequestException as exc:
+                errors.append({"draft_id": draft.id, "error": f"Request error: {exc}"})
+                continue
+
+            try:
+                resp_data = resp.json()
+            except ValueError:
+                resp_data = {"raw": resp.text}
+
+            if resp.status_code >= 400:
+                errors.append({"draft_id": draft.id, "status_code": resp.status_code, "error": resp.text})
+                continue
+
+            draft.timeslot_response = resp_data
+            draft.timeslot_updated_at = timezone.now()
+            draft.save(update_fields=["timeslot_response", "timeslot_updated_at", "updated_at"])
+            results.append({"draft_id": draft.id, "timeslot_response": resp_data})
+
+        status_code = status.HTTP_207_MULTI_STATUS if errors and results else status.HTTP_200_OK
+        if errors and not results:
+            status_code = status.HTTP_400_BAD_REQUEST
+        return Response({"results": results, "errors": errors}, status=status_code)
+
+
+class SupplyDraftTimeslotListView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, batch_id: str):
+        batch = get_object_or_404(
+            OzonSupplyBatch,
+            batch_id=batch_id,
+            store__in=user_store_queryset(request.user),
+        )
+
+        drafts = batch.drafts.all()
+        common_dates = None
+        common_timeslots = None
+
+        def extract_dates(ts):
+            dates = set()
+            for entry in ts.get("drop_off_warehouse_timeslots", []):
+                for day in entry.get("days", []):
+                    date_str = day.get("date_in_timezone")
+                    if date_str:
+                        dates.add(date_str[:10])
+            return dates
+
+        def get_wh_meta(wid, draft):
+            # пробуем найти метаданные склада из выбранного/списка складов черновика
+            sources = []
+            if draft.selected_supply_warehouse:
+                sources.append(draft.selected_supply_warehouse)
+            if draft.supply_warehouse:
+                sources.extend(draft.supply_warehouse)
+            for w in sources:
+                if str(w.get("warehouse_id") or w.get("id")) == str(wid):
+                    return {
+                        "warehouse_id": w.get("warehouse_id") or w.get("id"),
+                        "warehouse_name": w.get("name"),
+                        "warehouse_address": w.get("address"),
+                    }
+            return {"warehouse_id": wid, "warehouse_name": None, "warehouse_address": None}
+
+        def build_timeslots_by_wh(ts, draft):
+            slots_by_warehouse = {}
+            for entry in ts.get("drop_off_warehouse_timeslots", []):
+                wid = entry.get("drop_off_warehouse_id")
+                tz = entry.get("warehouse_timezone")
+                wh_meta = slots_by_warehouse.get(wid) or {
+                    **get_wh_meta(wid, draft),
+                    "warehouse_timezone": tz,
+                    "dates": {},
+                }
+                for day in entry.get("days", []):
+                    date_str = (day.get("date_in_timezone") or "")[:10]
+                    date_bucket = wh_meta["dates"].get(date_str) or []
+                    for slot in day.get("timeslots", []):
+                        date_bucket.append({
+                            "from": slot.get("from_in_timezone"),
+                            "to": slot.get("to_in_timezone"),
+                        })
+                    wh_meta["dates"][date_str] = date_bucket
+                slots_by_warehouse[wid] = wh_meta
+            grouped = []
+            for wid, meta in slots_by_warehouse.items():
+                grouped.append({
+                    "warehouse_id": meta.get("warehouse_id"),
+                    "warehouse_name": meta.get("warehouse_name"),
+                    "warehouse_address": meta.get("warehouse_address"),
+                    "warehouse_timezone": meta.get("warehouse_timezone"),
+                    "dates": [
+                        {"date": date, "timeslots": meta["dates"][date]}
+                        for date in sorted(meta["dates"])
+                    ],
+                })
+            return grouped
+
+        drafts_data = []
+        for d in drafts:
+            grouped_slots = []
+            dates = set()
+            if d.timeslot_response:
+                dates = extract_dates(d.timeslot_response)
+                grouped_slots = build_timeslots_by_wh(d.timeslot_response, d)
+                if common_dates is None:
+                    common_dates = dates
+                else:
+                    common_dates = common_dates & dates
+                # пересечение временных интервалов по датам
+                per_draft_slots = {}
+                for wh in grouped_slots:
+                    for day in wh.get("dates", []):
+                        key = day["date"]
+                        per_draft_slots.setdefault(key, set())
+                        for slot in day.get("timeslots", []):
+                            per_draft_slots[key].add((slot.get("from"), slot.get("to")))
+                if common_timeslots is None:
+                    # преобразуем в dict date -> set of tuples
+                    common_timeslots = {k: set(v) for k, v in per_draft_slots.items()}
+                else:
+                    for date_key in list(common_timeslots.keys()):
+                        if date_key in per_draft_slots:
+                            common_timeslots[date_key] = common_timeslots[date_key] & per_draft_slots[date_key]
+                        else:
+                            common_timeslots[date_key] = set()
+
+            drafts_data.append({
+                "draft_id": d.id,
+                "timeslot_response": d.timeslot_response,
+                "selected_supply_warehouse": d.selected_supply_warehouse,
+                "selected_timeslot": d.selected_timeslot,
+                "timeslot_updated_at": d.timeslot_updated_at,
+                "timeslots_by_warehouse": grouped_slots,
+            })
+
+        common_slots_serialized = []
+        if common_timeslots:
+            for date_key, slots in common_timeslots.items():
+                if slots:
+                    common_slots_serialized.append({
+                        "date": date_key,
+                        "timeslots": [{"from": f, "to": t} for f, t in sorted(slots)],
+                    })
+
+        return Response({
+            "batch_id": batch_id,
+            "drafts": drafts_data,
+            "common_dates": sorted(list(common_dates or [])),
+            "common_timeslots": common_slots_serialized,
+        }, status=status.HTTP_200_OK)
+
+# Получение конечной аналитики по продуктам
 
 
 # Получение конечной аналитики по продуктам версия 2
@@ -1224,10 +1689,7 @@ class Planer_View(APIView):
         except (TypeError, ValueError):
             return Response({"error": "store_id must be an integer"}, status=status.HTTP_400_BAD_REQUEST)
 
-        try:
-            ozon_store = OzonStore.objects.get(id=store_id, user=request.user)
-        except OzonStore.DoesNotExist:
-            return Response({"error": "Store not found"}, status=status.HTTP_404_NOT_FOUND)
+        ozon_store = get_object_or_404(user_store_queryset(request.user), id=store_id)
 
         filters = self._get_filters_from_settings(ozon_store)
         days = filters["days"]

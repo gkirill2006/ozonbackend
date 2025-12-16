@@ -1,4 +1,6 @@
 from tabnanny import verbose
+import uuid
+from decimal import Decimal
 from django.db import models
 from users.models import User, OzonStore
 
@@ -115,6 +117,72 @@ class OzonWarehouseDirectory(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.warehouse_id}) — {self.logistic_cluster_name}"
+
+
+class OzonSupplyBatch(models.Model):
+    store = models.ForeignKey(OzonStore, on_delete=models.CASCADE, related_name="supply_batches")
+    batch_id = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
+    batch_seq = models.PositiveIntegerField(default=0)
+    supply_type = models.CharField(max_length=64)
+    drop_off_point_warehouse_id = models.BigIntegerField()
+    drop_off_point_name = models.CharField(max_length=255, blank=True)
+    status = models.CharField(max_length=32, default="queued")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+
+    def __str__(self):
+        return f"Batch {self.batch_seq or self.batch_id}"
+
+
+class OzonSupplyDraft(models.Model):
+    STATUS_CHOICES = [
+        ("queued", "Queued"),
+        ("in_progress", "In progress"),
+        ("draft_created", "Draft created"),
+        ("info_loaded", "Info loaded"),
+        ("failed", "Failed"),
+    ]
+
+    batch = models.ForeignKey(OzonSupplyBatch, on_delete=models.CASCADE, related_name="drafts")
+    store = models.ForeignKey(OzonStore, on_delete=models.CASCADE, related_name="supply_drafts")
+    supply_type = models.CharField(max_length=64)
+    logistic_cluster_id = models.BigIntegerField()
+    logistic_cluster_name = models.CharField(max_length=255)
+    drop_off_point_warehouse_id = models.BigIntegerField()
+    drop_off_point_name = models.CharField(max_length=255, blank=True)
+
+    request_payload = models.JSONField()
+    response_payload = models.JSONField(null=True, blank=True)
+    operation_id = models.CharField(max_length=64, blank=True)
+    draft_id = models.BigIntegerField(null=True, blank=True)
+    supply_warehouse = models.JSONField(null=True, blank=True)
+    selected_supply_warehouse = models.JSONField(null=True, blank=True)
+    timeslot_response = models.JSONField(null=True, blank=True)
+    selected_timeslot = models.JSONField(null=True, blank=True)
+    timeslot_updated_at = models.DateTimeField(null=True, blank=True)
+
+    status = models.CharField(max_length=32, choices=STATUS_CHOICES, default="queued")
+    attempts = models.PositiveIntegerField(default=0)
+    next_attempt_at = models.DateTimeField(null=True, blank=True)
+    error_message = models.TextField(blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["store", "logistic_cluster_id"]),
+            models.Index(fields=["operation_id"]),
+            models.Index(fields=["batch"]),
+        ]
+        verbose_name = "Черновик поставки OZON"
+        verbose_name_plural = "Черновики поставок OZON"
+
+    def __str__(self):
+        return f"Draft {self.operation_id or 'pending'} for cluster {self.logistic_cluster_name}"
 
 # Модель для хранения продаж FBS+FBO
 class Sale(models.Model):

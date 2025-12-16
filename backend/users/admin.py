@@ -6,6 +6,7 @@ from .models import (
     StoreFilterSettings,
     StoreRequiredProduct,
     StoreExcludedProduct,
+    StoreAccess,
 )
 from ozon.tasks import sync_full_store_data
 from django.contrib import messages
@@ -54,3 +55,10 @@ class StoreFilterSettingsAdmin(admin.ModelAdmin):
     list_display = ('store', 'planning_days', 'analysis_period', 'sort_by', 'updated_at')
     search_fields = ('store__name', 'store__client_id')
     inlines = [RequiredProductInline, ExcludedProductInline]
+
+
+@admin.register(StoreAccess)
+class StoreAccessAdmin(admin.ModelAdmin):
+    list_display = ("store", "user", "status", "invited_by", "created_at")
+    list_filter = ("status",)
+    search_fields = ("store__name", "user__username", "user__telegram_id")

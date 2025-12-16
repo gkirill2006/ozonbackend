@@ -14,13 +14,28 @@ from django.utils.decorators import method_decorator
 from django.utils.crypto import get_random_string
 from django.core.cache import cache
 from drf_yasg import openapi
-from .models import User, OzonStore, StoreFilterSettings
+from .models import User, OzonStore, StoreFilterSettings, StoreAccess
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.views.decorators.csrf import csrf_exempt
+from django.db.models import Q
 
 
 
 import logging
+
+
+def user_store_queryset(user):
+    """
+    Возвращает queryset магазинов, доступных пользователю:
+    - магазины, где он владелец;
+    - магазины, куда его пригласили и он принял приглашение.
+    """
+    return (
+        OzonStore.objects.filter(
+            Q(user=user) | Q(accesses__user=user, accesses__status=StoreAccess.STATUS_ACCEPTED)
+        )
+        .distinct()
+    )
 
 
 # Create your views here.
@@ -202,7 +217,7 @@ class UserStoreListCreateView(generics.ListCreateAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return OzonStore.objects.filter(user=self.request.user).order_by('name', 'client_id')
+        return user_store_queryset(self.request.user).order_by('name', 'client_id')
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
@@ -213,7 +228,19 @@ class UserStoreDetailView(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return OzonStore.objects.filter(user=self.request.user)
+        return user_store_queryset(self.request.user)
+
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if instance.user != request.user:
+            return Response({"error": "Только владелец магазина может изменять его настройки"}, status=status.HTTP_403_FORBIDDEN)
+        return super().update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if instance.user != request.user:
+            return Response({"error": "Удаление магазина доступно только владельцу"}, status=status.HTTP_403_FORBIDDEN)
+        return super().destroy(request, *args, **kwargs)
 
 
 class StoreFilterSettingsView(generics.RetrieveUpdateAPIView):
@@ -223,12 +250,142 @@ class StoreFilterSettingsView(generics.RetrieveUpdateAPIView):
 
     def get_store(self):
         return get_object_or_404(
-            OzonStore,
+            user_store_queryset(self.request.user),
             pk=self.kwargs[self.lookup_url_kwarg],
-            user=self.request.user,
         )
 
     def get_object(self):
         store = self.get_store()
         obj, _ = StoreFilterSettings.objects.get_or_create(store=store)
         return obj
+
+
+class StoreInviteView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, store_id):
+        username = (request.data.get("username") or request.data.get("telegram_username") or "").lstrip("@")
+        if not username:
+            return Response({"error": "Не указан username пользователя"}, status=status.HTTP_400_BAD_REQUEST)
+
+        store = get_object_or_404(OzonStore, pk=store_id, user=request.user)
+        target_user = User.objects.filter(username__iexact=username).first()
+        if not target_user:
+            return Response({"error": "Пользователь с таким username не найден"}, status=status.HTTP_404_NOT_FOUND)
+        if target_user == request.user:
+            return Response({"error": "Нельзя пригласить самого себя"}, status=status.HTTP_400_BAD_REQUEST)
+
+        access, created = StoreAccess.objects.get_or_create(
+            store=store,
+            user=target_user,
+            defaults={"status": StoreAccess.STATUS_PENDING, "invited_by": request.user},
+        )
+        if not created:
+            if access.status != StoreAccess.STATUS_PENDING:
+                access.status = StoreAccess.STATUS_PENDING
+            access.invited_by = request.user
+            access.save(update_fields=["status", "invited_by", "updated_at"])
+            msg = "Приглашение обновлено"
+        else:
+            msg = "Приглашение создано"
+
+        return Response(
+            {
+                "store_id": store.id,
+                "user_id": str(target_user.id),
+                "status": access.status,
+                "message": msg,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class StoreInviteRespondView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, store_id):
+        decision = (request.data.get("decision") or request.data.get("status") or "").lower()
+        if decision not in ("accept", "accepted", "reject", "rejected"):
+            return Response({"error": "Укажите decision: accept или reject"}, status=status.HTTP_400_BAD_REQUEST)
+
+        access = get_object_or_404(StoreAccess, store_id=store_id, user=request.user)
+        access.status = StoreAccess.STATUS_ACCEPTED if decision.startswith("accept") else StoreAccess.STATUS_REJECTED
+        access.save(update_fields=["status", "updated_at"])
+
+        return Response(
+            {
+                "store_id": store_id,
+                "status": access.status,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class StoreInviteListView(APIView):
+    """
+    Список приглашений для текущего пользователя (все статусы).
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        invites = (
+            StoreAccess.objects.select_related("store", "invited_by")
+            .filter(user=request.user)
+            .order_by("-created_at")
+        )
+        data = []
+        for inv in invites:
+            data.append(
+                {
+                    "store_id": inv.store.id,
+                    "store_name": inv.store.name or inv.store.client_id,
+                    "status": inv.status,
+                    "invited_by": getattr(inv.invited_by, "username", None),
+                    "created_at": inv.created_at,
+                    "updated_at": inv.updated_at,
+                }
+            )
+        return Response(data, status=status.HTTP_200_OK)
+
+
+class StoreAccessManageView(APIView):
+    """
+    Список/удаление доступов к магазину (только владелец).
+    GET  /auth/stores/<store_id>/accesses/     -> список пользователей
+    DELETE /auth/stores/<store_id>/accesses/<user_id>/ -> отозвать доступ
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_store(self, request, store_id):
+        return get_object_or_404(OzonStore, pk=store_id, user=request.user)
+
+    def get(self, request, store_id):
+        store = self.get_store(request, store_id)
+        accesses = (
+            StoreAccess.objects.select_related("user", "invited_by")
+            .filter(store=store)
+            .order_by("created_at")
+        )
+        data = []
+        for acc in accesses:
+            data.append(
+                {
+                    "user_id": str(acc.user.id),
+                    "username": acc.user.username,
+                    "telegram_id": acc.user.telegram_id,
+                    "status": acc.status,
+                    "invited_by": getattr(acc.invited_by, "username", None),
+                    "created_at": acc.created_at,
+                    "updated_at": acc.updated_at,
+                    "is_owner": acc.user == store.user,
+                }
+            )
+        return Response(data, status=status.HTTP_200_OK)
+
+    def delete(self, request, store_id, user_id):
+        store = self.get_store(request, store_id)
+        access = get_object_or_404(StoreAccess, store=store, user_id=user_id)
+        access.delete()
+        return Response({"deleted": True}, status=status.HTTP_200_OK)

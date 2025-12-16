@@ -7,6 +7,8 @@ from .models import (
     Product,
     WarehouseStock,
     OzonWarehouseDirectory,
+    OzonSupplyBatch,
+    OzonSupplyDraft,
     Sale,
     FbsStock,
     Category,
@@ -92,6 +94,40 @@ class OzonWarehouseDirectoryAdmin(admin.ModelAdmin):
     )
     readonly_fields = ('created_at', 'updated_at')
     ordering = ('store', 'logistic_cluster_id', 'warehouse_id')
+
+
+@admin.register(OzonSupplyBatch)
+class OzonSupplyBatchAdmin(admin.ModelAdmin):
+    list_display = (
+        'batch_id',
+        'batch_seq',
+        'store',
+        'status',
+        'drop_off_point_warehouse_id',
+        'created_at',
+        'updated_at',
+    )
+    search_fields = ('batch_id', 'store__name')
+    list_filter = ('status', 'store')
+    readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(OzonSupplyDraft)
+class OzonSupplyDraftAdmin(admin.ModelAdmin):
+    list_display = (
+        'store',
+        'operation_id',
+        'logistic_cluster_name',
+        'drop_off_point_warehouse_id',
+        'draft_id',
+        'selected_supply_warehouse',
+        'selected_timeslot',
+        'status',
+        'created_at',
+    )
+    search_fields = ('operation_id', 'logistic_cluster_name', 'drop_off_point_name')
+    list_filter = ('status', 'store', 'logistic_cluster_name')
+    readonly_fields = ('created_at', 'updated_at', 'request_payload', 'response_payload', 'timeslot_response', 'timeslot_updated_at')
     
 @admin.register(Sale)
 class SaleAdmin(admin.ModelAdmin):

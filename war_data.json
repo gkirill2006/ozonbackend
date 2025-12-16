@@ -1,0 +1,450 @@
+[
+    {
+        "batch_id": "ef2de5b1-5a5a-4615-b5d1-583206b05045",
+        "batch_seq": 1,
+        "store": 1,
+        "status": "completed",
+        "drop_off_point_warehouse_id": 21896333622000,
+        "drop_off_point_name": "САНКТ-ПЕТЕРБУРГ_РФЦ_Кроссдокинг",
+        "created_at": "2025-12-11T21:54:11.777720+03:00",
+        "updated_at": "2025-12-11T21:56:36.204930+03:00",
+        "drafts": [
+            {
+                "id": 16,
+                "logistic_cluster_id": 176,
+                "logistic_cluster_name": "Екатеринбург",
+                "drop_off_point_warehouse_id": 21896333622000,
+                "drop_off_point_name": "САНКТ-ПЕТЕРБУРГ_РФЦ_Кроссдокинг",
+                "operation_id": "019b0ec5-6e48-7356-9a7d-1b9125778b03",
+                "draft_id": 78408017,
+                "supply_warehouse": [
+                    {
+                        "name": "Екатеринбург_РФЦ_НОВЫЙ",
+                        "status": {
+                            "state": "WAREHOUSE_SCORING_STATUS_FULL_AVAILABLE",
+                            "is_available": true,
+                            "invalid_reason": "WAREHOUSE_SCORING_INVALID_REASON_NO_REASON"
+                        },
+                        "address": "620025, Свердловская обл, Екатеринбург г, Логопарк Кольцовский тер, стр 15",
+                        "bundle_ids": [
+                            {
+                                "bundle_id": "019b0ec5-7394-7389-9b96-7a2ad7ac52ee",
+                                "is_docless": true
+                            }
+                        ],
+                        "warehouse_id": 18044570445000,
+                        "travel_time_days": "7"
+                    },
+                    {
+                        "name": "ЕКАТЕРИНБУРГ_РФЦ_НЕГАБАРИТ",
+                        "status": {
+                            "state": "WAREHOUSE_SCORING_STATUS_NOT_AVAILABLE",
+                            "is_available": false,
+                            "invalid_reason": "WAREHOUSE_SCORING_INVALID_REASON_NOT_AVAILABLE_MATRIX"
+                        },
+                        "address": "620025, Свердловская обл, Екатеринбург г, Логопарк Кольцовский тер, стр 15",
+                        "bundle_ids": [],
+                        "warehouse_id": 1020001135128000,
+                        "travel_time_days": null
+                    }
+                ],
+                "selected_supply_warehouse": {
+                    "name": "Екатеринбург_РФЦ_НОВЫЙ",
+                    "status": {
+                        "state": "WAREHOUSE_SCORING_STATUS_FULL_AVAILABLE",
+                        "is_available": true,
+                        "invalid_reason": "WAREHOUSE_SCORING_INVALID_REASON_NO_REASON"
+                    },
+                    "address": "620025, Свердловская обл, Екатеринбург г, Логопарк Кольцовский тер, стр 15",
+                    "bundle_ids": [
+                        {
+                            "bundle_id": "019b0ec5-7394-7389-9b96-7a2ad7ac52ee",
+                            "is_docless": true
+                        }
+                    ],
+                    "warehouse_id": 18044570445000,
+                    "travel_time_days": "7"
+                },
+                "timeslot_response": null,
+                "selected_timeslot": null,
+                "timeslot_updated_at": null,
+                "status": "info_loaded",
+                "attempts": 2,
+                "next_attempt_at": "2025-12-11T21:56:27.570619+03:00",
+                "error_message": "",
+                "created_at": "2025-12-11T21:54:11.790799+03:00",
+                "updated_at": "2025-12-11T21:56:30.336580+03:00"
+            },
+            {
+                "id": 14,
+                "logistic_cluster_id": 150,
+                "logistic_cluster_name": "Самара",
+                "drop_off_point_warehouse_id": 21896333622000,
+                "drop_off_point_name": "САНКТ-ПЕТЕРБУРГ_РФЦ_Кроссдокинг",
+                "operation_id": "019b0ec5-840e-7090-936c-92c988487782",
+                "draft_id": 78408022,
+                "supply_warehouse": [
+                    {
+                        "name": "САМАРА_РФЦ",
+                        "status": {
+                            "state": "WAREHOUSE_SCORING_STATUS_FULL_AVAILABLE",
+                            "is_available": true,
+                            "invalid_reason": "WAREHOUSE_SCORING_INVALID_REASON_NO_REASON"
+                        },
+                        "address": "446114, Россия, Самарская обл, Чапаевск г, Индустриальная ул, зд. 3",
+                        "bundle_ids": [
+                            {
+                                "bundle_id": "019b0ec5-88d9-72b0-a278-620e04f3a42b",
+                                "is_docless": true
+                            }
+                        ],
+                        "warehouse_id": 23128509046000,
+                        "travel_time_days": "5"
+                    }
+                ],
+                "selected_supply_warehouse": {
+                    "name": "САМАРА_РФЦ",
+                    "status": {
+                        "state": "WAREHOUSE_SCORING_STATUS_FULL_AVAILABLE",
+                        "is_available": true,
+                        "invalid_reason": "WAREHOUSE_SCORING_INVALID_REASON_NO_REASON"
+                    },
+                    "address": "446114, Россия, Самарская обл, Чапаевск г, Индустриальная ул, зд. 3",
+                    "bundle_ids": [
+                        {
+                            "bundle_id": "019b0ec5-88d9-72b0-a278-620e04f3a42b",
+                            "is_docless": true
+                        }
+                    ],
+                    "warehouse_id": 23128509046000,
+                    "travel_time_days": "5"
+                },
+                "timeslot_response": null,
+                "selected_timeslot": null,
+                "timeslot_updated_at": null,
+                "status": "info_loaded",
+                "attempts": 3,
+                "next_attempt_at": "2025-12-11T21:56:33.562420+03:00",
+                "error_message": "",
+                "created_at": "2025-12-11T21:54:11.787441+03:00",
+                "updated_at": "2025-12-11T21:56:36.197471+03:00"
+            },
+            {
+                "id": 13,
+                "logistic_cluster_id": 154,
+                "logistic_cluster_name": "Москва, МО и Дальние регионы",
+                "drop_off_point_warehouse_id": 21896333622000,
+                "drop_off_point_name": "САНКТ-ПЕТЕРБУРГ_РФЦ_Кроссдокинг",
+                "operation_id": "019b0ec3-81e1-73dd-9af2-a26a57c8b9ed",
+                "draft_id": 78407850,
+                "supply_warehouse": [
+                    {
+                        "name": "ХОРУГВИНО_РФЦ",
+                        "status": {
+                            "state": "WAREHOUSE_SCORING_STATUS_FULL_AVAILABLE",
+                            "is_available": true,
+                            "invalid_reason": "WAREHOUSE_SCORING_INVALID_REASON_NO_REASON"
+                        },
+                        "address": "141533, Московская область, Солнечногорский р-н, д. Хоругвино, 32/2",
+                        "bundle_ids": [
+                            {
+                                "bundle_id": "019b0ec3-8812-716d-831a-3d51c77a5dc3",
+                                "is_docless": true
+                            }
+                        ],
+                        "warehouse_id": 15431806189000,
+                        "travel_time_days": "3"
+                    },
+                    {
+                        "name": "ПУШКИНО_1_РФЦ",
+                        "status": {
+                            "state": "WAREHOUSE_SCORING_STATUS_FULL_AVAILABLE",
+                            "is_available": true,
+                            "invalid_reason": "WAREHOUSE_SCORING_INVALID_REASON_NO_REASON"
+                        },
+                        "address": "Россия, Московская ОБЛ, Пушкинский Г.О., Пушкино Г., Ярославское Ш., дом 216.",
+                        "bundle_ids": [
+                            {
+                                "bundle_id": "019b0ec3-8812-7563-9860-f3623894d9ac",
+                                "is_docless": true
+                            }
+                        ],
+                        "warehouse_id": 23843917228000,
+                        "travel_time_days": "2"
+                    },
+                    {
+                        "name": "ПУШКИНО_2_РФЦ",
+                        "status": {
+                            "state": "WAREHOUSE_SCORING_STATUS_NOT_AVAILABLE",
+                            "is_available": false,
+                            "invalid_reason": "WAREHOUSE_SCORING_INVALID_REASON_NOT_AVAILABLE_RANK"
+                        },
+                        "address": "Россия, Московская область, г.о. Пушкинский, г. Пушкино, шоссе Ярославское, д.218",
+                        "bundle_ids": [
+                            {
+                                "bundle_id": "019b0ec3-8812-7564-a666-6c1522bf8325",
+                                "is_docless": true
+                            }
+                        ],
+                        "warehouse_id": 23902289166000,
+                        "travel_time_days": null
+                    },
+                    {
+                        "name": "ГРИВНО_РФЦ",
+                        "status": {
+                            "state": "WAREHOUSE_SCORING_STATUS_NOT_AVAILABLE",
+                            "is_available": false,
+                            "invalid_reason": "WAREHOUSE_SCORING_INVALID_REASON_NOT_AVAILABLE_ROUTE"
+                        },
+                        "address": "142184, Российская Федерация, Московская область, Городской округ Подольск, деревня Гривно, территория промышленного парка Гривно, дом 1, корпус 13",
+                        "bundle_ids": [
+                            {
+                                "bundle_id": "019b0ec3-8813-77b0-b673-2978e7725a1f",
+                                "is_docless": true
+                            }
+                        ],
+                        "warehouse_id": 1020000435290000,
+                        "travel_time_days": null
+                    },
+                    {
+                        "name": "НОГИНСК_РФЦ",
+                        "status": {
+                            "state": "WAREHOUSE_SCORING_STATUS_NOT_AVAILABLE",
+                            "is_available": false,
+                            "invalid_reason": "WAREHOUSE_SCORING_INVALID_REASON_NOT_AVAILABLE_ROUTE"
+                        },
+                        "address": "142440, Российская Федерация, Московская область, Богородский городской округ, рабочий поселок Обухово, территория Обухово-Парк, дом 2, строение 1",
+                        "bundle_ids": [
+                            {
+                                "bundle_id": "019b0ec3-8813-7142-97e1-3025c3ea1730",
+                                "is_docless": true
+                            }
+                        ],
+                        "warehouse_id": 1020000759116000,
+                        "travel_time_days": null
+                    },
+                    {
+                        "name": "ДОМОДЕДОВО_РФЦ",
+                        "status": {
+                            "state": "WAREHOUSE_SCORING_STATUS_NOT_AVAILABLE",
+                            "is_available": false,
+                            "invalid_reason": "WAREHOUSE_SCORING_INVALID_REASON_NOT_AVAILABLE_ROUTE"
+                        },
+                        "address": "142032, Россия, Московская обл., Домодедово г., Кучино д., стр. 52",
+                        "bundle_ids": [
+                            {
+                                "bundle_id": "019b0ec3-8813-7141-898a-849b3adecdc5",
+                                "is_docless": true
+                            }
+                        ],
+                        "warehouse_id": 1020001853757000,
+                        "travel_time_days": null
+                    },
+                    {
+                        "name": "ЖУКОВСКИЙ_РФЦ",
+                        "status": {
+                            "state": "WAREHOUSE_SCORING_STATUS_NOT_AVAILABLE",
+                            "is_available": false,
+                            "invalid_reason": "WAREHOUSE_SCORING_INVALID_REASON_NOT_AVAILABLE_ROUTE"
+                        },
+                        "address": "140182 Россия, Московская обл., г.о. Жуковский, г.Жуковский, р-н Замоскворечье, д.457, стр.5",
+                        "bundle_ids": [
+                            {
+                                "bundle_id": "019b0ec3-8813-72c1-b2a6-251e20015033",
+                                "is_docless": true
+                            }
+                        ],
+                        "warehouse_id": 1020000115166000,
+                        "travel_time_days": null
+                    },
+                    {
+                        "name": "СОФЬИНО_РФЦ",
+                        "status": {
+                            "state": "WAREHOUSE_SCORING_STATUS_NOT_AVAILABLE",
+                            "is_available": false,
+                            "invalid_reason": "WAREHOUSE_SCORING_INVALID_REASON_NOT_AVAILABLE_ROUTE"
+                        },
+                        "address": "140126 Россия, Московская область, г.Раменское, квартал 4/218, строение 2/1",
+                        "bundle_ids": [
+                            {
+                                "bundle_id": "019b0ec3-8813-77b1-9ec0-cb86a0d22674",
+                                "is_docless": true
+                            }
+                        ],
+                        "warehouse_id": 1020000241710000,
+                        "travel_time_days": null
+                    },
+                    {
+                        "name": "Хоругвино_РФЦ_НЕГАБАРИТ",
+                        "status": {
+                            "state": "WAREHOUSE_SCORING_STATUS_NOT_AVAILABLE",
+                            "is_available": false,
+                            "invalid_reason": "WAREHOUSE_SCORING_INVALID_REASON_NOT_AVAILABLE_MATRIX"
+                        },
+                        "address": "141533, Московская область, Солнечногорский р-н, д. Хоругвино, 32/2",
+                        "bundle_ids": [],
+                        "warehouse_id": 19262731541000,
+                        "travel_time_days": null
+                    },
+                    {
+                        "name": "ГРИВНО_РФЦ_НЕГАБАРИТ",
+                        "status": {
+                            "state": "WAREHOUSE_SCORING_STATUS_NOT_AVAILABLE",
+                            "is_available": false,
+                            "invalid_reason": "WAREHOUSE_SCORING_INVALID_REASON_NOT_AVAILABLE_ROUTE"
+                        },
+                        "address": "142184, Российская Федерация, Московская область, Городской округ Подольск, деревня Гривно, территория промышленного парка Гривно, дом 1, корпус 13.",
+                        "bundle_ids": [],
+                        "warehouse_id": 1020000989855000,
+                        "travel_time_days": null
+                    },
+                    {
+                        "name": "НОГИНСК_РФЦ_НЕГАБАРИТ",
+                        "status": {
+                            "state": "WAREHOUSE_SCORING_STATUS_NOT_AVAILABLE",
+                            "is_available": false,
+                            "invalid_reason": "WAREHOUSE_SCORING_INVALID_REASON_NOT_AVAILABLE_ROUTE"
+                        },
+                        "address": "142440, Российская Федерация, Московская область, Богородский городской округ, рабочий поселок Обухово, территория Обухово-Парк, дом 2, строение 1",
+                        "bundle_ids": [],
+                        "warehouse_id": 1020001642383000,
+                        "travel_time_days": null
+                    },
+                    {
+                        "name": "ПАВЛО_СЛОБОДСКОЕ_РФЦ_НЕГАБАРИТ",
+                        "status": {
+                            "state": "WAREHOUSE_SCORING_STATUS_NOT_AVAILABLE",
+                            "is_available": false,
+                            "invalid_reason": "WAREHOUSE_SCORING_INVALID_REASON_NOT_AVAILABLE_MATRIX"
+                        },
+                        "address": "143581, Московская область, Истра г, Павловская Слобода с, квартала 0050343 тер, зд. 2",
+                        "bundle_ids": [],
+                        "warehouse_id": 1020000268887000,
+                        "travel_time_days": null
+                    },
+                    {
+                        "name": "РАДУМЛЯ_РФЦ_НЕГАБАРИТ",
+                        "status": {
+                            "state": "WAREHOUSE_SCORING_STATUS_NOT_AVAILABLE",
+                            "is_available": false,
+                            "invalid_reason": "WAREHOUSE_SCORING_INVALID_REASON_NOT_AVAILABLE_MATRIX"
+                        },
+                        "address": "Россия, Московская обл., г.Солнечногорск, д.Радумля, Оптово-распределительный центр Радумля тер, стр. 2",
+                        "bundle_ids": [],
+                        "warehouse_id": 1020002007811000,
+                        "travel_time_days": null
+                    }
+                ],
+                "selected_supply_warehouse": {
+                    "name": "ХОРУГВИНО_РФЦ",
+                    "status": {
+                        "state": "WAREHOUSE_SCORING_STATUS_FULL_AVAILABLE",
+                        "is_available": true,
+                        "invalid_reason": "WAREHOUSE_SCORING_INVALID_REASON_NO_REASON"
+                    },
+                    "address": "141533, Московская область, Солнечногорский р-н, д. Хоругвино, 32/2",
+                    "bundle_ids": [
+                        {
+                            "bundle_id": "019b0ec3-8812-716d-831a-3d51c77a5dc3",
+                            "is_docless": true
+                        }
+                    ],
+                    "warehouse_id": 15431806189000,
+                    "travel_time_days": "3"
+                },
+                "timeslot_response": null,
+                "selected_timeslot": null,
+                "timeslot_updated_at": null,
+                "status": "info_loaded",
+                "attempts": 1,
+                "next_attempt_at": "2025-12-11T21:54:21.969309+03:00",
+                "error_message": "",
+                "created_at": "2025-12-11T21:54:11.784742+03:00",
+                "updated_at": "2025-12-11T21:55:23.547394+03:00"
+            },
+            {
+                "id": 15,
+                "logistic_cluster_id": 149,
+                "logistic_cluster_name": "Казань",
+                "drop_off_point_warehouse_id": 21896333622000,
+                "drop_off_point_name": "САНКТ-ПЕТЕРБУРГ_РФЦ_Кроссдокинг",
+                "operation_id": "019b0ec4-733f-7107-96e3-50b7ed744c66",
+                "draft_id": 78407928,
+                "supply_warehouse": [
+                    {
+                        "name": "Казань_РФЦ_НОВЫЙ",
+                        "status": {
+                            "state": "WAREHOUSE_SCORING_STATUS_FULL_AVAILABLE",
+                            "is_available": true,
+                            "invalid_reason": "WAREHOUSE_SCORING_INVALID_REASON_NO_REASON"
+                        },
+                        "address": "422527, Республика Татарстан, Зеленодольский район, г. Зеленодольск, 19",
+                        "bundle_ids": [
+                            {
+                                "bundle_id": "019b0ec4-7844-73c6-9ff0-939517b4f7ab",
+                                "is_docless": true
+                            }
+                        ],
+                        "warehouse_id": 18044494830000,
+                        "travel_time_days": "6"
+                    },
+                    {
+                        "name": "НИЖНИЙ_НОВГОРОД_РФЦ",
+                        "status": {
+                            "state": "WAREHOUSE_SCORING_STATUS_NOT_AVAILABLE",
+                            "is_available": false,
+                            "invalid_reason": "WAREHOUSE_SCORING_INVALID_REASON_NOT_AVAILABLE_RANK"
+                        },
+                        "address": "Российская Федерация, Нижегородская обл., городской округ город Дзержинск, г. Дзержинск, ш. Игумновское, д.5 Г.",
+                        "bundle_ids": [
+                            {
+                                "bundle_id": "019b0ec4-7844-759a-8623-e16fb7442290",
+                                "is_docless": true
+                            }
+                        ],
+                        "warehouse_id": 23599177351000,
+                        "travel_time_days": null
+                    },
+                    {
+                        "name": "КЗН_СТОЛБИЩЕ_РФЦ_НЕГАБАРИТ",
+                        "status": {
+                            "state": "WAREHOUSE_SCORING_STATUS_NOT_AVAILABLE",
+                            "is_available": false,
+                            "invalid_reason": "WAREHOUSE_SCORING_INVALID_REASON_NOT_AVAILABLE_MATRIX"
+                        },
+                        "address": "422624, Россия, Татарстан Респ, Лаишевский м.р-н, Столбищенское с.п., Столбище с, Взлетная ул, зд. 28",
+                        "bundle_ids": [],
+                        "warehouse_id": 1020002066005000,
+                        "travel_time_days": null
+                    }
+                ],
+                "selected_supply_warehouse": {
+                    "name": "Казань_РФЦ_НОВЫЙ",
+                    "status": {
+                        "state": "WAREHOUSE_SCORING_STATUS_FULL_AVAILABLE",
+                        "is_available": true,
+                        "invalid_reason": "WAREHOUSE_SCORING_INVALID_REASON_NO_REASON"
+                    },
+                    "address": "422527, Республика Татарстан, Зеленодольский район, г. Зеленодольск, 19",
+                    "bundle_ids": [
+                        {
+                            "bundle_id": "019b0ec4-7844-73c6-9ff0-939517b4f7ab",
+                            "is_docless": true
+                        }
+                    ],
+                    "warehouse_id": 18044494830000,
+                    "travel_time_days": "6"
+                },
+                "timeslot_response": null,
+                "selected_timeslot": null,
+                "timeslot_updated_at": null,
+                "status": "info_loaded",
+                "attempts": 1,
+                "next_attempt_at": "2025-12-11T21:54:53.232943+03:00",
+                "error_message": "",
+                "created_at": "2025-12-11T21:54:11.788806+03:00",
+                "updated_at": "2025-12-11T21:55:25.850561+03:00"
+            }
+        ]
+    }
+]

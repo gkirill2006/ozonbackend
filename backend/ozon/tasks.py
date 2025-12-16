@@ -11,6 +11,8 @@ from .models import (
     Product,
     WarehouseStock,
     OzonWarehouseDirectory,
+    OzonSupplyBatch,
+    OzonSupplyDraft,
     Sale,
     FbsStock,
     ProductDailyAnalytics,
@@ -25,7 +27,7 @@ import json
 from collections import defaultdict
 import time
 from decimal import Decimal, ROUND_HALF_UP
-from django.db.models import Sum, F, ExpressionWrapper, DecimalField
+from django.db.models import Sum, F, ExpressionWrapper, DecimalField, Count
 from django.utils import timezone
 from datetime import date as dt_date, timedelta
 from math import ceil
@@ -44,6 +46,16 @@ import time
 import logging
 import os
 logger = logging.getLogger(__name__)
+
+
+OZON_DRAFT_CREATE_URL = "https://api-seller.ozon.ru/v1/draft/create"
+OZON_DRAFT_INFO_URL = "https://api-seller.ozon.ru/v1/draft/create/info"
+MIN_INTERVAL_SECONDS = 30  # 2 запроса в минуту
+RETRY_429_SECONDS = 60
+MAX_HOURLY_LIMIT = 50
+MAX_ATTEMPTS = 3
+INFO_RETRY_SECONDS = 10
+STALE_DRAFT_MINUTES = 60
 
 
 
@@ -2515,6 +2527,17 @@ def scheduled_rebalance_auto_weekly_budgets_monday(
         sheet_url = (store.google_sheet_url or '').strip()
         if not sheet_url:
             continue
+
+        # Пропускаем магазин, если рекламная система выключена
+        try:
+            from .models import StoreAdControl
+            ctrl = StoreAdControl.objects.filter(store=store).first()
+            if ctrl and not ctrl.is_system_enabled:
+                logger.info(f"[⛔] Перерасчёт недельных бюджетов пропущен: система для {store} выключена")
+                continue
+        except Exception as ctrl_err:
+            logger.warning(f"[⚠️] Не удалось проверить StoreAdControl для {store}: {ctrl_err}")
+
         processed += 1
         try:
             result = rebalance_auto_weekly_budgets(
@@ -2615,6 +2638,16 @@ def rebalance_auto_weekly_budgets(
         if not store:
             logger.error(f"[❌] Магазин '{store_name}' не найден")
             return {"error": f"store '{store_name}' not found"}
+
+        # Пропускаем перерасчёт, если система для магазина выключена
+        try:
+            from .models import StoreAdControl
+            control = StoreAdControl.objects.filter(store=store).first()
+            if control and not control.is_system_enabled:
+                logger.info(f"[⛔] Рекламная система для {store} выключена. Перерасчёт недельных бюджетов пропущен.")
+                return {"skipped": True, "reason": "store ads disabled"}
+        except Exception as ctrl_err:
+            logger.warning(f"[⚠️] Не удалось проверить StoreAdControl для {store}: {ctrl_err}")
 
         month_budget = _parse_decimal(ws.acell('B5').value)
         min_budget = _parse_decimal(ws.acell('V22').value)
@@ -6721,3 +6754,202 @@ def update_manual_campaign_kpis_in_sheets(
     if errors:
         summary["errors"] = errors
     return summary
+
+
+def _hourly_created_count(store):
+    since = timezone.now() - timedelta(hours=1)
+    return OzonSupplyDraft.objects.filter(
+        store=store,
+        operation_id__gt="",
+        created_at__gte=since,
+    ).count()
+
+
+def _update_batch_status(batch: OzonSupplyBatch):
+    drafts = list(batch.drafts.all())
+    if any(d.status in ("queued", "in_progress", "draft_created") for d in drafts):
+        batch.status = "processing"
+    elif all(d.status == "info_loaded" for d in drafts):
+        batch.status = "completed"
+    elif any(d.status == "failed" for d in drafts):
+        batch.status = "partial"
+    else:
+        batch.status = "processing"
+    batch.save(update_fields=["status", "updated_at"])
+
+
+def _call_ozon(url, headers, payload):
+    resp = requests.post(url, headers=headers, json=payload, timeout=30)
+    try:
+        data = resp.json()
+    except ValueError:
+        data = {"raw": resp.text}
+    return resp, data
+
+
+def _cleanup_stale_drafts():
+    cutoff = timezone.now() - timedelta(minutes=STALE_DRAFT_MINUTES)
+    stale = OzonSupplyDraft.objects.filter(created_at__lt=cutoff).exclude(status="created")
+
+    logger.info(f"{stale}")
+    deleted = stale.count()
+    if deleted:
+        stale.delete()
+    empty_batches = (
+        OzonSupplyBatch.objects
+        .annotate(draft_count=Count("drafts"))
+        .filter(draft_count=0)
+    )
+    empty_count = empty_batches.count()
+    if empty_count:
+        empty_batches.delete()
+    return deleted, empty_count
+
+
+def process_supply_batch_sync(batch_uuid: str):
+    try:
+        batch = OzonSupplyBatch.objects.get(batch_id=batch_uuid)
+    except OzonSupplyBatch.DoesNotExist:
+        logger.error(f"[❌] Batch {batch_uuid} not found")
+        return
+
+    last_call = None
+    drafts_qs = batch.drafts.filter(status__in=["queued", "failed", "in_progress", "draft_created"]).order_by("created_at")
+
+    for draft in drafts_qs:
+        now = timezone.now()
+        if draft.next_attempt_at and draft.next_attempt_at > now:
+            continue
+
+        if draft.attempts >= MAX_ATTEMPTS and draft.status == "failed":
+            continue
+
+        if draft.status == "draft_created":
+            # Проверяем готовность info спустя паузу
+            info_payload = {"operation_id": draft.operation_id}
+            headers = {
+                "Client-Id": draft.store.client_id,
+                "Api-Key": draft.store.api_key,
+                "Content-Type": "application/json",
+            }
+            try:
+                resp, info_data = _call_ozon(OZON_DRAFT_INFO_URL, headers, info_payload)
+            except requests.RequestException as exc:
+                draft.error_message = f"Ошибка info-запроса: {exc}"
+                draft.next_attempt_at = now + timedelta(seconds=INFO_RETRY_SECONDS)
+                draft.save(update_fields=["error_message", "next_attempt_at", "updated_at"])
+                continue
+
+            if resp.status_code == 429:
+                draft.next_attempt_at = now + timedelta(seconds=RETRY_429_SECONDS)
+                draft.error_message = "429 на info, повтор позже."
+                draft.save(update_fields=["next_attempt_at", "error_message", "updated_at"])
+                continue
+
+            if resp.status_code >= 400:
+                draft.error_message = f"Ошибка info: {resp.text[:500]}"
+                draft.next_attempt_at = now + timedelta(seconds=INFO_RETRY_SECONDS)
+                draft.save(update_fields=["error_message", "next_attempt_at", "updated_at"])
+                continue
+
+            status_flag = info_data.get("status")
+            draft.response_payload = {"create": draft.response_payload, "info": info_data}
+            if status_flag != "CALCULATION_STATUS_SUCCESS":
+                draft.next_attempt_at = now + timedelta(seconds=INFO_RETRY_SECONDS)
+                draft.error_message = f"Статус {status_flag}, повтор позже."
+                draft.save(update_fields=["response_payload", "next_attempt_at", "error_message", "updated_at"])
+                continue
+
+            draft.draft_id = info_data.get("draft_id")
+            # Приводим список складов к плоскому виду с warehouse_id
+            warehouses = []
+            raw_wh = info_data.get("warehouses") or []
+            if raw_wh:
+                for w in raw_wh:
+                    if w.get("warehouse_id"):
+                        warehouses.append(w)
+            else:
+                clusters = info_data.get("clusters") or []
+                for c in clusters:
+                    for w in c.get("warehouses", []):
+                        sw = w.get("supply_warehouse") or {}
+                        if sw.get("warehouse_id"):
+                            sw = {
+                                **sw,
+                                "status": w.get("status"),
+                                "bundle_ids": w.get("bundle_ids"),
+                                "travel_time_days": w.get("travel_time_days"),
+                            }
+                            warehouses.append(sw)
+
+            draft.supply_warehouse = warehouses
+            if warehouses:
+                draft.selected_supply_warehouse = warehouses[0]
+            draft.status = "info_loaded"
+            draft.error_message = ""
+            draft.save(update_fields=["draft_id", "supply_warehouse", "selected_supply_warehouse", "response_payload", "status", "error_message", "updated_at"])
+            continue
+
+        if _hourly_created_count(draft.store) >= MAX_HOURLY_LIMIT:
+            draft.status = "queued"
+            draft.next_attempt_at = now + timedelta(hours=1)
+            draft.error_message = "Достигнут лимит 50 черновиков в час."
+            draft.save(update_fields=["status", "next_attempt_at", "error_message", "updated_at"])
+            continue
+
+        if last_call:
+            diff = (timezone.now() - last_call).total_seconds()
+            if diff < MIN_INTERVAL_SECONDS:
+                time.sleep(MIN_INTERVAL_SECONDS - diff)
+
+        headers = {
+            "Client-Id": draft.store.client_id,
+            "Api-Key": draft.store.api_key,
+            "Content-Type": "application/json",
+        }
+
+        draft.status = "in_progress"
+        draft.attempts += 1
+        draft.next_attempt_at = None
+        draft.error_message = ""
+        draft.save(update_fields=["status", "attempts", "next_attempt_at", "error_message", "updated_at"])
+
+        try:
+            resp, resp_data = _call_ozon(OZON_DRAFT_CREATE_URL, headers, draft.request_payload)
+        except requests.RequestException as exc:
+            draft.status = "failed"
+            draft.error_message = f"Ошибка запроса: {exc}"
+            draft.next_attempt_at = now + timedelta(minutes=1)
+            draft.save(update_fields=["status", "error_message", "next_attempt_at", "updated_at"])
+            continue
+
+        last_call = timezone.now()
+
+        if resp.status_code == 429:
+            draft.status = "queued"
+            draft.next_attempt_at = now + timedelta(seconds=RETRY_429_SECONDS)
+            draft.error_message = "Превышен лимит 429, повтор через 60с."
+            draft.save(update_fields=["status", "next_attempt_at", "error_message", "updated_at"])
+            continue
+
+        if resp.status_code >= 400:
+            draft.status = "failed"
+            draft.response_payload = resp_data
+            draft.error_message = resp.text[:500]
+            draft.save(update_fields=["status", "response_payload", "error_message", "updated_at"])
+            continue
+
+        operation_id = resp_data.get("operation_id") or resp_data.get("result") or ""
+        draft.operation_id = operation_id
+        draft.response_payload = resp_data
+        draft.status = "draft_created"
+        draft.next_attempt_at = now + timedelta(seconds=INFO_RETRY_SECONDS)
+        draft.save(update_fields=["operation_id", "response_payload", "status", "next_attempt_at", "updated_at"])
+
+    _update_batch_status(batch)
+    _cleanup_stale_drafts()
+
+
+@shared_task
+def process_supply_batch(batch_uuid: str):
+    return process_supply_batch_sync(batch_uuid)

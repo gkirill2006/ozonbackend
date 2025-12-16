@@ -10,6 +10,7 @@ from users.models import (
     StoreRequiredProduct,
     StoreExcludedProduct,
 )
+from ozon.models import OzonWarehouseDirectory, OzonSupplyDraft
 
 
 class PlannerViewTests(APITestCase):
@@ -79,3 +80,75 @@ class PlannerViewTests(APITestCase):
         self.assertIn("summary", response.data)
         self.assertIsInstance(response.data["clusters"], list)
         self.assertIsInstance(response.data["summary"], list)
+
+
+class CreateSupplyDraftViewTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(telegram_id=3003, password="pass")
+        self.store = OzonStore.objects.create(user=self.user, name="SupplyStore", client_id="cid", api_key="akey")
+        self.url = reverse("ozon-create-draft")
+        OzonWarehouseDirectory.objects.create(
+            store=self.store,
+            warehouse_id=1,
+            warehouse_type="fbo",
+            name="Москва",
+            logistic_cluster_id=154,
+            logistic_cluster_name="Москва, МО и Дальние регионы",
+            logistic_cluster_type="REGION",
+            macrolocal_cluster_id=10,
+        )
+        OzonWarehouseDirectory.objects.create(
+            store=self.store,
+            warehouse_id=2,
+            warehouse_type="fbo",
+            name="Краснодар",
+            logistic_cluster_id=200,
+            logistic_cluster_name="Краснодар",
+            logistic_cluster_type="REGION",
+            macrolocal_cluster_id=11,
+        )
+
+        self.payload = {
+            "store_id": self.store.id,
+            "supplyType": "CREATE_TYPE_CROSSDOCK",
+            "destinationWarehouse": {
+                "warehouse_id": 21896333622000,
+                "name": "САНКТ-ПЕТЕРБУРГ_РФЦ_Кроссдокинг",
+            },
+            "shipments": [
+                {
+                    "warehouse": "Краснодар",
+                    "items": [
+                        {"sku": 849086014, "quantity": 24},
+                        {"sku": 849086015, "quantity": 0},
+                    ],
+                },
+                {
+                    "warehouse": "Москва, МО и Дальние регионы",
+                    "items": [
+                        {"sku": 123, "quantity": 10},
+                    ],
+                },
+            ],
+        }
+
+    def test_requires_auth(self):
+        resp = self.client.post(self.url, self.payload, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_requires_store_belongs_to_user(self):
+        other = User.objects.create_user(telegram_id=9999, password="pass")
+        foreign_store = OzonStore.objects.create(user=other, name="Foreign", client_id="c2", api_key="a2")
+        self.client.force_authenticate(self.user)
+        resp = self.client.post(self.url, {**self.payload, "store_id": foreign_store.id}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_creates_drafts_per_cluster(self):
+        self.client.force_authenticate(self.user)
+        resp = self.client.post(self.url, self.payload, format="json")
+
+        self.assertEqual(resp.status_code, status.HTTP_202_ACCEPTED)
+        self.assertEqual(OzonSupplyBatch.objects.count(), 1)
+        self.assertEqual(OzonSupplyDraft.objects.count(), 2)
+        self.assertIn("batch_id", resp.data)
+        self.assertEqual(len(resp.data.get("drafts", [])), 2)

@@ -11,6 +11,10 @@ from .views import (
     UserStoreListCreateView,
     UserStoreDetailView,
     StoreFilterSettingsView,
+    StoreInviteView,
+    StoreInviteRespondView,
+    StoreInviteListView,
+    StoreAccessManageView,
 )
 
 urlpatterns = [
@@ -26,5 +30,10 @@ urlpatterns = [
     path('stores/', UserStoreListCreateView.as_view(), name='user-store-list'),
     path('stores/<int:pk>/', UserStoreDetailView.as_view(), name='user-store-detail'),
     path('stores/<int:store_id>/filters/', StoreFilterSettingsView.as_view(), name='store-filter-settings'),
+    path('stores/<int:store_id>/invite/', StoreInviteView.as_view(), name='store-invite'),
+    path('stores/<int:store_id>/invite/respond/', StoreInviteRespondView.as_view(), name='store-invite-respond'),
+    path('stores/invites/', StoreInviteListView.as_view(), name='store-invite-list'),
+    path('stores/<int:store_id>/accesses/', StoreAccessManageView.as_view(), name='store-access-list'),
+    path('stores/<int:store_id>/accesses/<uuid:user_id>/', StoreAccessManageView.as_view(), name='store-access-delete'),
 
 ]

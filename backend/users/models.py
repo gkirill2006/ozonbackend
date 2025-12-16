@@ -106,6 +106,31 @@ class StoreFilterSettings(models.Model):
         return f"Filters for {self.store}"
 
 
+class StoreAccess(models.Model):
+    STATUS_PENDING = "pending"
+    STATUS_ACCEPTED = "accepted"
+    STATUS_REJECTED = "rejected"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_ACCEPTED, "Accepted"),
+        (STATUS_REJECTED, "Rejected"),
+    ]
+
+    store = models.ForeignKey(OzonStore, on_delete=models.CASCADE, related_name="accesses")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="store_accesses")
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    invited_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="sent_store_invites")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("store", "user")
+        verbose_name = "Store access"
+        verbose_name_plural = "Store accesses"
+
+    def __str__(self):
+        return f"{self.user} access to {self.store} [{self.status}]"
+
 class StoreRequiredProduct(models.Model):
     filter_settings = models.ForeignKey(
         StoreFilterSettings,

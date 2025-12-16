@@ -229,6 +229,9 @@ class TelegramWebAppLoginSerializer(serializers.Serializer):
 
 
 class OzonStoreSerializer(serializers.ModelSerializer):
+    is_owner = serializers.SerializerMethodField()
+    owner_username = serializers.SerializerMethodField()
+
     class Meta:
         model = OzonStore
         fields = [
@@ -240,8 +243,31 @@ class OzonStoreSerializer(serializers.ModelSerializer):
             'performance_service_account_number',
             'performance_client_id',
             'performance_client_secret',
+            'is_owner',
+            'owner_username',
         ]
-        read_only_fields = ['id']
+        read_only_fields = ['id', 'is_owner', 'owner_username']
+
+    def get_is_owner(self, obj):
+        request = self.context.get('request')
+        return bool(request and getattr(request, 'user', None) == obj.user)
+
+    def get_owner_username(self, obj):
+        return obj.user.username if obj.user else None
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        is_owner = self.get_is_owner(instance)
+        # Скрываем чувствительные ключи для пользователей, которые не владелец магазина
+        if not is_owner:
+            client_id = instance.client_id or ""
+            if client_id:
+                data['client_id'] = f"{client_id[:3]}***{client_id[-3:]}"
+            else:
+                data['client_id'] = None
+            data['api_key'] = None
+            data['performance_client_secret'] = None
+        return data
 
 
 class StoreRequiredProductSerializer(serializers.ModelSerializer):

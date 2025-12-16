@@ -103,6 +103,22 @@ services:
       timeout: 10s
       retries: 3
 
+
+  celery_scheduler:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: markets_scheduler
+    command: python run_scheduler.py
+    working_dir: /workspace/backend/backend/
+    env_file:
+      - .env
+    volumes:
+      - .:/workspace
+    depends_on:
+      - markets-backend
+      - redis
+    restart: always
   bot:
     build:
       context: .

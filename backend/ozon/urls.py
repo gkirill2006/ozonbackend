@@ -16,6 +16,13 @@ from .views import (
     Planer_View,
     PlanerPivotView,
     OzonFboWarehouseSearchView,
+    CreateSupplyDraftView,
+    SupplyDraftBatchStatusView,
+    SupplyDraftBatchListView,
+    SupplyDraftSelectWarehouseView,
+    SupplyDraftDeleteView,
+    SupplyDraftTimeslotFetchView,
+    SupplyDraftTimeslotListView,
 )
 urlpatterns = [
     path('ozon/products/', SyncOzonProductView.as_view()),
@@ -35,5 +42,12 @@ urlpatterns = [
     path("ozon/planner/", Planer_View.as_view(), name="ozon-planner"),
     path("ozon/planner/pivot/", PlanerPivotView.as_view(), name="ozon-planner-pivot"),
     path("ozon/warehouse/fbo/search/", OzonFboWarehouseSearchView.as_view()),
+    path("ozon/drafts/create/", CreateSupplyDraftView.as_view(), name="ozon-create-draft"),
+    path("ozon/drafts/batch/<uuid:batch_id>/", SupplyDraftBatchStatusView.as_view(), name="ozon-draft-batch-status"),
+    path("ozon/drafts/batches/", SupplyDraftBatchListView.as_view(), name="ozon-draft-batch-list"),
+    path("ozon/drafts/<int:draft_id>/select-warehouse/", SupplyDraftSelectWarehouseView.as_view(), name="ozon-draft-select-warehouse"),
+    path("ozon/drafts/<int:draft_id>/", SupplyDraftDeleteView.as_view(), name="ozon-draft-delete"),
+    path("ozon/drafts/timeslots/fetch/", SupplyDraftTimeslotFetchView.as_view(), name="ozon-draft-timeslot-fetch"),
+    path("ozon/drafts/batch/<uuid:batch_id>/timeslots/", SupplyDraftTimeslotListView.as_view(), name="ozon-draft-timeslot-list"),
 
 ]
