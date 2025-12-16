@@ -28,8 +28,8 @@ TELEGRAM_BOT_TOKEN="7789819880:AAEiangD6q1z6B16VdqMM_ADWRWNyXsDsUQ"
 # TELEGRAM_BOT_TOKEN = '7619741744:AAGGn9WicVRcDrvaPT0LN5uIr9Cw4vyWOSg'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
-# DEBUG = False
+# DEBUG = True
+DEBUG = False
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'

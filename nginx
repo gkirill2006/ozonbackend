@@ -36,14 +36,22 @@ location /assets/ {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # 🔁 Прокси на Django API
+    location /auth/ {
+        proxy_pass http://127.0.0.1:9006;  # порт из docker-compose
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
     # 🖼️ Медиа-файлы Django
     location /media/ {
-        alias /home/markets/ozonbackend/media/;
+        alias /home/markets/ozonbackend/backend/media/;
     }
 
     # 🧾 Статика Django (если нужна)
     location /static/ {
-        alias /home/markets/ozonbackend/staticfiles/;
+        alias /home/markets/ozonbackend/backend/staticfiles/;
     }
     # ⚡ Сжатие
     gzip on;
@@ -52,16 +60,9 @@ location /assets/ {
 
 
 
-}
-
-
 server {
-
-
-
     server_name ozon.codemark.me;
     listen 80;
-
-
-
 }
+
+

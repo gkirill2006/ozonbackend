@@ -14,3 +14,6 @@ scp /Users/kirill/Projects/Work/WB_Google/backend/users/admin.py ecoforce_dev:/h
 S1008 Блок питания 12V/1,5A (3,5*1,35) чер
 sku = 2909660721
 
+
+
+cat backup_161225.sql | docker exec -i markets_db psql -U market markets_db
