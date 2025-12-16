@@ -84,6 +84,7 @@ db.sqlite3
 *.swo
 *.bak
 *.orig
+backend/backup_*.sql
 
 # Project-specific sensitive files
 ozon-469708-c5f1eca77c02.json
