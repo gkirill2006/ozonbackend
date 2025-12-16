@@ -41,13 +41,15 @@ ALLOWED_HOSTS = [
     "127.0.0.1",
     "94.141.122.224",
     "188.68.222.242",
+    "ozon.codemark.me"
 ]
 CSRF_TRUSTED_ORIGINS = [
     'http://markets-backend:8000',
     'https://t.me',
     'https://web.telegram.org',
     'http://localhost:9000',
-    'http://127.0.0.1:9000'
+    'http://127.0.0.1:9000',
+    'https://ozon.codemark.me'
 ]
 
 # CSRF_TRUSTED_ORIGINS = ['']

@@ -1,0 +1,67 @@
+server {
+    server_name ozon.codemark.me;
+        client_max_body_size 100M;
+    # 📦 Фронт (Vue)
+    root /home/markets/ozonadminpanel/dist;
+    index index.html;
+
+    location / {
+        try_files $uri /index.html;
+    }
+location = /index.html {
+    add_header Cache-Control "no-cache, no-store, must-revalidate";
+    try_files $uri /index.html;
+}
+
+location /assets/ {
+    add_header Cache-Control "public, max-age=31536000, immutable";
+}
+
+# Автокомплит и прочие Django маршруты
+
+    # ✅ Django admin
+    location /admin/ {
+        proxy_pass http://127.0.0.1:9006;  # тот же порт, что и для API
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    # 🔁 Прокси на Django API
+    location /api/ {
+        proxy_pass http://127.0.0.1:9006;  # порт из docker-compose
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # 🖼️ Медиа-файлы Django
+    location /media/ {
+        alias /home/markets/ozonbackend/media/;
+    }
+
+    # 🧾 Статика Django (если нужна)
+    location /static/ {
+        alias /home/markets/ozonbackend/staticfiles/;
+    }
+    # ⚡ Сжатие
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript;
+
+
+
+
+}
+
+
+server {
+
+
+
+    server_name ozon.codemark.me;
+    listen 80;
+
+
+
+}
