@@ -23,6 +23,7 @@ from .views import (
     SupplyDraftDeleteView,
     SupplyDraftTimeslotFetchView,
     SupplyDraftTimeslotListView,
+    SupplyDraftCreateSupplyView,
 )
 urlpatterns = [
     path('ozon/products/', SyncOzonProductView.as_view()),
@@ -49,5 +50,6 @@ urlpatterns = [
     path("ozon/drafts/<int:draft_id>/", SupplyDraftDeleteView.as_view(), name="ozon-draft-delete"),
     path("ozon/drafts/timeslots/fetch/", SupplyDraftTimeslotFetchView.as_view(), name="ozon-draft-timeslot-fetch"),
     path("ozon/drafts/batch/<uuid:batch_id>/timeslots/", SupplyDraftTimeslotListView.as_view(), name="ozon-draft-timeslot-list"),
+    path("ozon/drafts/batch/<uuid:batch_id>/confirm-supply/", SupplyDraftCreateSupplyView.as_view(), name="ozon-draft-confirm-supply"),
 
 ]

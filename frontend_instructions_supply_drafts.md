@@ -7,6 +7,7 @@
 
 - `GET /api/ozon/drafts/batch/<batch_id>/`
   - Resp 200: `{ "batch_id": "uuid", "batch_seq": <int>, "store": <int>, "status": "...", "drop_off_point_warehouse_id": <int>, "drafts": [ { "id": <int>, "logistic_cluster_id": <int>, "logistic_cluster_name": "...", "operation_id": "...", "draft_id": <int|null>, "supply_warehouse": [...], "selected_supply_warehouse": {...}, "selected_timeslot": {...}, "status": "...", "attempts": <int>, "next_attempt_at": "...", "error_message": "..." }, ... ] }`
+  - В драфтах также есть `operation_id_supply` (после финального создания заявки) и `status: "created"` если заявка создана.
 
 - `GET /api/ozon/drafts/batches/?store_id=<id>` (опц. store_id)
   - Resp 200: массив батчей в том же формате, каждый с `drafts`.
@@ -64,6 +65,12 @@
     }
     ```
 
+- `POST /api/ozon/drafts/batch/<batch_id>/confirm-supply/`
+  - Body: `{ "timeslot": { "from_in_timezone": "2025-12-19T09:00:00Z", "to_in_timezone": "2025-12-19T10:00:00Z" } }`
+  - Действие: для каждого черновика батча берёт выбранный склад (`selected_supply_warehouse`, если пусто — первый из списка) и отправляет в OZON `/v1/draft/supply/create` с выбранным таймслотом.
+  - Resp 200/207/400: `{ "results": [ { "draft_id": <int>, "operation_id_supply": "..." } ], "errors": [ { "draft_id": <int>, "error": "...", "status_code": <int?> } ] }`
+  - В черновик сохраняются: `operation_id_supply`, `selected_timeslot`, `status: "created"`. Батч получает статус `completed`, либо `partial` если были ошибки.
+
 ### Формат запроса на создание (аналог `war_data.json`)
 ```http
 POST /api/ozon/drafts/create/
@@ -117,6 +124,7 @@ Content-Type: application/json
 - `in_progress` — отправляем запрос в OZON.
 - `draft_created` — получили `operation_id` от `/v1/draft/create`; info-запрос повторяется каждые ~10 секунд, пока статус OZON не станет `CALCULATION_STATUS_SUCCESS`.
 - `info_loaded` — получили `draft_id` и `supply_warehouse` от `/v1/draft/create/info`; первый склад автоматически сохраняется в `selected_supply_warehouse`.
+- `created` — создана финальная заявка на поставку через `/v1/draft/supply/create` (хранится `operation_id_supply`, выбранный таймслот).
 - `failed` — ошибка, смотреть `error_message`.
 
 Статусы батча: `processing`, `completed`, `partial` (если есть ошибки).

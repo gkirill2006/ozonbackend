@@ -89,8 +89,8 @@ backend/backup_*.sql
 # Project-specific sensitive files
 ozon-469708-c5f1eca77c02.json
 
-# backend/ozon/migrations/*
-# !backend/ozon/migrations/__init__.py
-# backend/users/migrations/*
-# !backend/users/migrations/__init__.py
+backend/ozon/migrations/*
+!backend/ozon/migrations/__init__.py
+backend/users/migrations/*
+!backend/users/migrations/__init__.py
 backend/backup_161225.sql

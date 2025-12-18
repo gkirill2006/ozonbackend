@@ -806,6 +806,119 @@ class SupplyDraftTimeslotListView(APIView):
             "common_timeslots": common_slots_serialized,
         }, status=status.HTTP_200_OK)
 
+
+class SupplyDraftCreateSupplyView(APIView):
+    """
+    Создает финальную заявку на поставку по всем черновикам батча с указанным тайм-слотом.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+    OZON_SUPPLY_CREATE_URL = "https://api-seller.ozon.ru/v1/draft/supply/create"
+
+    @staticmethod
+    def _normalize_warehouses(draft: OzonSupplyDraft):
+        data = draft.supply_warehouse or []
+        flat = []
+        for entry in data:
+            if isinstance(entry, dict) and entry.get("warehouse_id"):
+                flat.append(entry)
+            elif isinstance(entry, dict) and "warehouses" in entry:
+                for w in entry.get("warehouses", []):
+                    sw = w.get("supply_warehouse") or {}
+                    if sw.get("warehouse_id"):
+                        flat.append({
+                            **sw,
+                            "status": w.get("status"),
+                            "bundle_ids": w.get("bundle_ids"),
+                            "travel_time_days": w.get("travel_time_days"),
+                        })
+        if flat:
+            draft.supply_warehouse = flat
+            if not draft.selected_supply_warehouse:
+                draft.selected_supply_warehouse = flat[0]
+            draft.save(update_fields=["supply_warehouse", "selected_supply_warehouse", "updated_at"])
+        return flat
+
+    def post(self, request, batch_id: str):
+        timeslot = request.data.get("timeslot") or {}
+        from_ts = timeslot.get("from_in_timezone")
+        to_ts = timeslot.get("to_in_timezone")
+        if not (from_ts and to_ts):
+            return Response({"error": "timeslot.from_in_timezone and timeslot.to_in_timezone required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        batch = get_object_or_404(
+            OzonSupplyBatch,
+            batch_id=batch_id,
+            store__in=user_store_queryset(request.user),
+        )
+
+        results = []
+        errors = []
+
+        for draft in batch.drafts.all():
+            if not draft.draft_id:
+                errors.append({"draft_id": draft.id, "error": "draft_id missing (info not loaded)"})
+                continue
+
+            warehouses = self._normalize_warehouses(draft)
+            selected = draft.selected_supply_warehouse or (warehouses[0] if warehouses else None)
+            if not selected:
+                errors.append({"draft_id": draft.id, "error": "No warehouse selected"})
+                continue
+            warehouse_id = selected.get("warehouse_id") or selected.get("id")
+            if not warehouse_id:
+                errors.append({"draft_id": draft.id, "error": "warehouse_id missing"})
+                continue
+
+            payload = {
+                "draft_id": draft.draft_id,
+                "timeslot": timeslot,
+                "warehouse_id": int(warehouse_id),
+            }
+            headers = {
+                "Client-Id": draft.store.client_id,
+                "Api-Key": draft.store.api_key,
+                "Content-Type": "application/json",
+            }
+            try:
+                resp = requests.post(self.OZON_SUPPLY_CREATE_URL, headers=headers, json=payload, timeout=30)
+            except requests.RequestException as exc:
+                errors.append({"draft_id": draft.id, "error": f"Request error: {exc}"})
+                continue
+
+            try:
+                resp_data = resp.json()
+            except ValueError:
+                resp_data = {"raw": resp.text}
+
+            if resp.status_code >= 400:
+                errors.append({"draft_id": draft.id, "status_code": resp.status_code, "error": resp.text})
+                continue
+
+            operation_id_supply = resp_data.get("operation_id")
+            draft.operation_id_supply = operation_id_supply or ""
+            draft.selected_timeslot = timeslot
+            draft.status = "created"
+            draft.save(update_fields=["operation_id_supply", "selected_timeslot", "status", "updated_at"])
+
+            results.append({
+                "draft_id": draft.id,
+                "operation_id_supply": operation_id_supply,
+                "warehouse_id": warehouse_id,
+                "timeslot": timeslot,
+            })
+
+        if results and not errors:
+            batch.status = "completed"
+        elif results and errors:
+            batch.status = "partial"
+        batch.save(update_fields=["status", "updated_at"])
+
+        status_code = status.HTTP_207_MULTI_STATUS if errors and results else status.HTTP_200_OK
+        if errors and not results:
+            status_code = status.HTTP_400_BAD_REQUEST
+        return Response({"results": results, "errors": errors}, status=status_code)
+
 # Получение конечной аналитики по продуктам
 
 

@@ -6769,7 +6769,7 @@ def _update_batch_status(batch: OzonSupplyBatch):
     drafts = list(batch.drafts.all())
     if any(d.status in ("queued", "in_progress", "draft_created") for d in drafts):
         batch.status = "processing"
-    elif all(d.status == "info_loaded" for d in drafts):
+    elif all(d.status in ("info_loaded", "created") for d in drafts):
         batch.status = "completed"
     elif any(d.status == "failed" for d in drafts):
         batch.status = "partial"

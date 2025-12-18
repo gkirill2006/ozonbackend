@@ -143,6 +143,7 @@ class OzonSupplyDraft(models.Model):
         ("in_progress", "In progress"),
         ("draft_created", "Draft created"),
         ("info_loaded", "Info loaded"),
+        ("created", "Created"),
         ("failed", "Failed"),
     ]
 
@@ -157,6 +158,7 @@ class OzonSupplyDraft(models.Model):
     request_payload = models.JSONField()
     response_payload = models.JSONField(null=True, blank=True)
     operation_id = models.CharField(max_length=64, blank=True)
+    operation_id_supply = models.CharField(max_length=64, blank=True)
     draft_id = models.BigIntegerField(null=True, blank=True)
     supply_warehouse = models.JSONField(null=True, blank=True)
     selected_supply_warehouse = models.JSONField(null=True, blank=True)

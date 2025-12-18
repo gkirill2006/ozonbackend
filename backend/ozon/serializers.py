@@ -40,6 +40,7 @@ class SupplyDraftSerializer(serializers.ModelSerializer):
             "drop_off_point_warehouse_id",
             "drop_off_point_name",
             "operation_id",
+            "operation_id_supply",
             "draft_id",
             "supply_warehouse",
             "selected_supply_warehouse",

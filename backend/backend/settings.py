@@ -28,8 +28,8 @@ TELEGRAM_BOT_TOKEN="7789819880:AAEiangD6q1z6B16VdqMM_ADWRWNyXsDsUQ"
 # TELEGRAM_BOT_TOKEN = '7619741744:AAGGn9WicVRcDrvaPT0LN5uIr9Cw4vyWOSg'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-# DEBUG = True
-DEBUG = False
+DEBUG = True
+# DEBUG = False
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
@@ -41,7 +41,8 @@ ALLOWED_HOSTS = [
     "127.0.0.1",
     "94.141.122.224",
     "188.68.222.242",
-    "ozon.codemark.me"
+    "ozon.codemark.me",
+    "checkyourstore.online"
 ]
 CSRF_TRUSTED_ORIGINS = [
     'http://markets-backend:8000',
@@ -49,7 +50,8 @@ CSRF_TRUSTED_ORIGINS = [
     'https://web.telegram.org',
     'http://localhost:9000',
     'http://127.0.0.1:9000',
-    'https://ozon.codemark.me'
+    'https://ozon.codemark.me',
+    'https://checkyourstore.online'
 ]
 
 # CSRF_TRUSTED_ORIGINS = ['']

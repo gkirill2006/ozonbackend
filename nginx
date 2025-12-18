@@ -1,5 +1,5 @@
 server {
-    server_name ozon.codemark.me;
+    server_name checkyourstore.online;
         client_max_body_size 100M;
     # 📦 Фронт (Vue)
     root /home/markets/ozonadminpanel/dist;
@@ -36,7 +36,6 @@ location /assets/ {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    # 🔁 Прокси на Django API
     location /auth/ {
         proxy_pass http://127.0.0.1:9006;  # порт из docker-compose
         proxy_set_header Host $host;
@@ -57,12 +56,18 @@ location /assets/ {
     gzip on;
     gzip_types text/plain text/css application/json application/javascript;
 
-
-
-
-server {
-    server_name ozon.codemark.me;
-    listen 80;
 }
 
 
+server {
+    if ($host = checkyourstore.online) {
+        return 301 https://$host$request_uri;
+    } # managed by Certbot
+
+
+    server_name checkyourstore.online;
+    listen 80;
+    return 404; # managed by Certbot
+
+
+}
