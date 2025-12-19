@@ -955,6 +955,7 @@ class SupplyDraftSupplyStatusView(APIView):
                     "draft_id": draft.id,
                     "order_ids": order_ids,
                     "orders": orders,
+                    "order_states": [o.get("state") for o in orders if isinstance(o, dict)],
                     "bundle_items": bundle_items,
                 }
             )

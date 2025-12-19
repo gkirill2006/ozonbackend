@@ -31,6 +31,8 @@ class DraftCreateSerializer(serializers.Serializer):
 
 
 class SupplyDraftSerializer(serializers.ModelSerializer):
+    supply_order_states = serializers.SerializerMethodField()
+
     class Meta:
         model = OzonSupplyDraft
         fields = [
@@ -54,9 +56,17 @@ class SupplyDraftSerializer(serializers.ModelSerializer):
             "supply_order_ids",
             "supply_order_response",
             "supply_bundle_items",
+            "supply_order_states",
             "created_at",
             "updated_at",
         ]
+
+    def get_supply_order_states(self, obj):
+        """
+        Возвращает список статусов заявок на поставку, если они есть в сохраненном ответе.
+        """
+        orders = (obj.supply_order_response or {}).get("orders") or []
+        return [o.get("state") for o in orders if isinstance(o, dict) and o.get("state")]
 
 
 class SupplyBatchStatusSerializer(serializers.ModelSerializer):

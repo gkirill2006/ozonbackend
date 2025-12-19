@@ -89,6 +89,7 @@
           "draft_id": 101,
           "order_ids": [80537687],
           "orders": [ /* raw ответ v3/supply-order/get */ ],
+          "order_states": ["DATA_FILLING", "READY_TO_SUPPLY"],
           "bundle_items": [
             { "sku": 1010410937, "quantity": 23, "offer_id": "...", "icon_path": "...", "name": "...", "barcode": "...", "product_id": 534151104 }
           ]
@@ -98,6 +99,13 @@
     }
     ```
   - В черновике сохраняются `supply_order_ids`, `supply_order_response`, `supply_bundle_items` (их же можно брать из обычного списка батчей).
+
+### Что фронт получает для поставок
+- В черновике (и в списках батчей/подтвержденных батчей):
+  - `supply_order_ids` — идентификаторы заявок;
+  - `supply_order_states` — статусы заявок (`DATA_FILLING`, `READY_TO_SUPPLY`, `ACCEPTED_AT_SUPPLY_WAREHOUSE`, `IN_TRANSIT`, `ACCEPTANCE_AT_STORAGE_WAREHOUSE`, `REPORTS_CONFIRMATION_AWAITING`, `REPORT_REJECTED`, `COMPLETED`, `REJECTED_AT_SUPPLY_WAREHOUSE`, `CANCELLED`, `OVERDUE`, `UNSPECIFIED`);
+  - `supply_bundle_items` — товары в поставке: `sku`, `quantity`, `offer_id`, `icon_path`, `name`, `barcode`, `product_id`.
+- Через `GET /api/ozon/drafts/batch/<batch_id>/supply-info/` сразу приходят `order_states` и `bundle_items` (их же сохраняем в черновик).
 
 ### Формат запроса на создание (аналог `war_data.json`)
 ```http
