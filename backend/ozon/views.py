@@ -26,7 +26,11 @@ from .utils import (
     fetch_fbo_sales,
     fetch_fbs_stocks,
 )
-from .serializers import DraftCreateSerializer, SupplyBatchStatusSerializer
+from .serializers import (
+    DraftCreateSerializer,
+    SupplyBatchStatusSerializer,
+    SupplyBatchConfirmedSerializer,
+)
 import time
 from django.db.models import Sum, F, Count, Q
 from datetime import datetime, timedelta
@@ -468,6 +472,8 @@ class SupplyDraftBatchStatusView(APIView):
     def get(self, request, batch_id: str):
         store_qs = user_store_queryset(request.user)
         batch = get_object_or_404(OzonSupplyBatch, batch_id=batch_id, store__in=store_qs)
+        if not batch.drafts.exclude(status="created").exists():
+            return Response({"error": "Batch not found"}, status=status.HTTP_404_NOT_FOUND)
 
         serializer = SupplyBatchStatusSerializer(batch)
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -483,6 +489,37 @@ class SupplyDraftBatchListView(generics.ListAPIView):
             OzonSupplyBatch.objects
             .filter(store__in=store_qs)
             .prefetch_related("drafts")
+            .annotate(
+                non_created_count=Count("drafts", filter=~Q(drafts__status="created"))
+            )
+            .filter(non_created_count__gt=0)
+            .order_by("-created_at")
+        )
+        store_id = self.request.query_params.get("store_id")
+        if store_id:
+            qs = qs.filter(store_id=store_id)
+        return qs
+
+
+class SupplyDraftBatchConfirmedListView(generics.ListAPIView):
+    """
+    Батчи, по которым все черновики уже подтверждены (status=created).
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = SupplyBatchConfirmedSerializer
+
+    def get_queryset(self):
+        store_qs = user_store_queryset(self.request.user)
+        qs = (
+            OzonSupplyBatch.objects
+            .filter(store__in=store_qs)
+            .prefetch_related("drafts")
+            .annotate(
+                created_count=Count("drafts", filter=Q(drafts__status="created")),
+                total_count=Count("drafts"),
+            )
+            .filter(created_count__gt=0, total_count=F("created_count"))
             .order_by("-created_at")
         )
         store_id = self.request.query_params.get("store_id")
@@ -805,6 +842,127 @@ class SupplyDraftTimeslotListView(APIView):
             "common_dates": sorted(list(common_dates or [])),
             "common_timeslots": common_slots_serialized,
         }, status=status.HTTP_200_OK)
+
+
+class SupplyDraftSupplyStatusView(APIView):
+    """
+    Загружает данные по созданным заявкам (status=created) и возвращает товары поставки.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+    OZON_SUPPLY_STATUS_URL = "https://api-seller.ozon.ru/v1/draft/supply/create/status"
+    OZON_SUPPLY_GET_URL = "https://api-seller.ozon.ru/v3/supply-order/get"
+    OZON_SUPPLY_BUNDLE_URL = "https://api-seller.ozon.ru/v1/supply-order/bundle"
+
+    def _call(self, url, headers, payload):
+        resp = requests.post(url, headers=headers, json=payload, timeout=30)
+        try:
+            data = resp.json()
+        except ValueError:
+            data = {"raw": resp.text}
+        return resp, data
+
+    def get(self, request, batch_id: str):
+        batch = get_object_or_404(
+            OzonSupplyBatch,
+            batch_id=batch_id,
+            store__in=user_store_queryset(request.user),
+        )
+
+        results = []
+        errors = []
+
+        for draft in batch.drafts.all():
+            if draft.status != "created" or not draft.operation_id_supply:
+                continue
+
+            headers = {
+                "Client-Id": draft.store.client_id,
+                "Api-Key": draft.store.api_key,
+                "Content-Type": "application/json",
+            }
+
+            # 1) статус создания заявки
+            status_payload = {"operation_id": draft.operation_id_supply}
+            resp, status_data = self._call(self.OZON_SUPPLY_STATUS_URL, headers, status_payload)
+            if resp.status_code >= 400:
+                errors.append({"draft_id": draft.id, "error": status_data, "status_code": resp.status_code})
+                continue
+            order_ids = (status_data.get("result") or {}).get("order_ids") or []
+            if not order_ids:
+                errors.append({"draft_id": draft.id, "error": "order_ids empty"})
+                continue
+
+            # 2) детали заказов
+            get_payload = {"order_ids": order_ids}
+            resp, orders_data = self._call(self.OZON_SUPPLY_GET_URL, headers, get_payload)
+            if resp.status_code >= 400:
+                errors.append({"draft_id": draft.id, "error": orders_data, "status_code": resp.status_code})
+                continue
+            orders = orders_data.get("orders") or []
+
+            # Собираем bundle_ids и склады
+            bundle_ids = []
+            storage_ids = set()
+            dropoff_id = None
+            for order in orders:
+                drop = order.get("drop_off_warehouse") or {}
+                if drop.get("warehouse_id"):
+                    dropoff_id = drop.get("warehouse_id")
+                for supply in order.get("supplies") or []:
+                    if supply.get("bundle_id"):
+                        bundle_ids.append(supply["bundle_id"])
+                    storage = (supply.get("storage_warehouse") or {}).get("warehouse_id")
+                    if storage:
+                        storage_ids.add(str(storage))
+
+            bundle_items = []
+            if bundle_ids:
+                bundle_payload = {
+                    "bundle_ids": bundle_ids,
+                    "is_asc": True,
+                    "item_tags_calculation": {
+                        "dropoff_warehouse_id": dropoff_id or 0,
+                        "storage_warehouse_ids": list(storage_ids) if storage_ids else [],
+                    },
+                    "limit": 100,
+                    "sort_field": "UNSPECIFIED",
+                }
+                resp, bundle_data = self._call(self.OZON_SUPPLY_BUNDLE_URL, headers, bundle_payload)
+                if resp.status_code >= 400:
+                    errors.append({"draft_id": draft.id, "error": bundle_data, "status_code": resp.status_code})
+                else:
+                    for item in bundle_data.get("items") or []:
+                        bundle_items.append(
+                            {
+                                "sku": item.get("sku"),
+                                "quantity": item.get("quantity"),
+                                "offer_id": item.get("offer_id"),
+                                "icon_path": item.get("icon_path"),
+                                "name": item.get("name"),
+                                "barcode": item.get("barcode"),
+                                "product_id": item.get("product_id"),
+                            }
+                        )
+
+            draft.supply_order_ids = order_ids
+            draft.supply_order_response = orders_data
+            draft.supply_bundle_items = bundle_items
+            draft.save(update_fields=["supply_order_ids", "supply_order_response", "supply_bundle_items", "updated_at"])
+
+            results.append(
+                {
+                    "draft_id": draft.id,
+                    "order_ids": order_ids,
+                    "orders": orders,
+                    "bundle_items": bundle_items,
+                }
+            )
+
+        status_code = status.HTTP_207_MULTI_STATUS if errors and results else status.HTTP_200_OK
+        if errors and not results:
+            status_code = status.HTTP_400_BAD_REQUEST
+        return Response({"results": results, "errors": errors}, status=status_code)
 
 
 class SupplyDraftCreateSupplyView(APIView):

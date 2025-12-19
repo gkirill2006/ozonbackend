@@ -51,13 +51,16 @@ class SupplyDraftSerializer(serializers.ModelSerializer):
             "attempts",
             "next_attempt_at",
             "error_message",
+            "supply_order_ids",
+            "supply_order_response",
+            "supply_bundle_items",
             "created_at",
             "updated_at",
         ]
 
 
 class SupplyBatchStatusSerializer(serializers.ModelSerializer):
-    drafts = SupplyDraftSerializer(many=True, read_only=True)
+    drafts = serializers.SerializerMethodField()
 
     class Meta:
         model = OzonSupplyBatch
@@ -72,3 +75,29 @@ class SupplyBatchStatusSerializer(serializers.ModelSerializer):
             "updated_at",
             "drafts",
         ]
+
+    def get_drafts(self, obj):
+        qs = obj.drafts.exclude(status="created")
+        return SupplyDraftSerializer(qs, many=True).data
+
+
+class SupplyBatchConfirmedSerializer(serializers.ModelSerializer):
+    drafts = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OzonSupplyBatch
+        fields = [
+            "batch_id",
+            "batch_seq",
+            "store",
+            "status",
+            "drop_off_point_warehouse_id",
+            "drop_off_point_name",
+            "created_at",
+            "updated_at",
+            "drafts",
+        ]
+
+    def get_drafts(self, obj):
+        qs = obj.drafts.filter(status="created")
+        return SupplyDraftSerializer(qs, many=True).data

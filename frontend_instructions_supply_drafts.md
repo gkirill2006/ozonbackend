@@ -11,6 +11,11 @@
 
 - `GET /api/ozon/drafts/batches/?store_id=<id>` (опц. store_id)
   - Resp 200: массив батчей в том же формате, каждый с `drafts`.
+  - В этот список **не входят** батчи, у которых все черновики уже перешли в статус `created` (подтвержденные поставки).
+
+- `GET /api/ozon/drafts/batches/confirmed/?store_id=<id>` (опц. store_id)
+  - Батчи, где все черновики в статусе `created` (подтвержденные поставки).
+  - Формат как у списка батчей, но в `drafts` будут только `created` черновики с полями `operation_id_supply`, `selected_timeslot`, `supply_order_ids`, `supply_bundle_items` и т.д.
 
 - `POST /api/ozon/drafts/<draft_id>/select-warehouse/`
   - Body: `{ "warehouse_id": "<id из supply_warehouse>" }`
@@ -70,6 +75,29 @@
   - Действие: для каждого черновика батча берёт выбранный склад (`selected_supply_warehouse`, если пусто — первый из списка) и отправляет в OZON `/v1/draft/supply/create` с выбранным таймслотом.
   - Resp 200/207/400: `{ "results": [ { "draft_id": <int>, "operation_id_supply": "..." } ], "errors": [ { "draft_id": <int>, "error": "...", "status_code": <int?> } ] }`
   - В черновик сохраняются: `operation_id_supply`, `selected_timeslot`, `status: "created"`. Батч получает статус `completed`, либо `partial` если были ошибки.
+
+- `GET /api/ozon/drafts/batch/<batch_id>/supply-info/`
+  - Берёт все черновики батча со статусом `created`, для каждого вызывает:
+    1) `/v1/draft/supply/create/status` по `operation_id_supply` → `order_ids`
+    2) `/v3/supply-order/get` по `order_ids`
+    3) `/v1/supply-order/bundle` по `bundle_ids` из заказа, чтобы получить товары.
+  - Resp 200/207/400:
+    ```json
+    {
+      "results": [
+        {
+          "draft_id": 101,
+          "order_ids": [80537687],
+          "orders": [ /* raw ответ v3/supply-order/get */ ],
+          "bundle_items": [
+            { "sku": 1010410937, "quantity": 23, "offer_id": "...", "icon_path": "...", "name": "...", "barcode": "...", "product_id": 534151104 }
+          ]
+        }
+      ],
+      "errors": [ { "draft_id": 101, "error": "...", "status_code": 400 } ]
+    }
+    ```
+  - В черновике сохраняются `supply_order_ids`, `supply_order_response`, `supply_bundle_items` (их же можно брать из обычного списка батчей).
 
 ### Формат запроса на создание (аналог `war_data.json`)
 ```http

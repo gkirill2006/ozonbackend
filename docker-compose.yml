@@ -1,16 +1,16 @@
 
 services:
-  # wb_analyzer:
-  #   build: .
-  #   container_name: wb_analyzer
-  #   ports:
-  #     - "9005:8000"
-  #   mem_limit: 512m
-  #   cpus: 0.5
-  #   restart: always
-  #   env_file: .env
-  #   volumes:
-  #     - .:/app
+  wb_analyzer:
+    build: .
+    container_name: wb_analyzer
+    ports:
+      - "9005:8000"
+    mem_limit: 512m
+    cpus: 0.5
+    restart: always
+    env_file: .env
+    volumes:
+      - .:/app
 
   markets-backend:
     build:

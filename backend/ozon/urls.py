@@ -19,11 +19,13 @@ from .views import (
     CreateSupplyDraftView,
     SupplyDraftBatchStatusView,
     SupplyDraftBatchListView,
+    SupplyDraftBatchConfirmedListView,
     SupplyDraftSelectWarehouseView,
     SupplyDraftDeleteView,
     SupplyDraftTimeslotFetchView,
     SupplyDraftTimeslotListView,
     SupplyDraftCreateSupplyView,
+    SupplyDraftSupplyStatusView,
 )
 urlpatterns = [
     path('ozon/products/', SyncOzonProductView.as_view()),
@@ -46,10 +48,12 @@ urlpatterns = [
     path("ozon/drafts/create/", CreateSupplyDraftView.as_view(), name="ozon-create-draft"),
     path("ozon/drafts/batch/<uuid:batch_id>/", SupplyDraftBatchStatusView.as_view(), name="ozon-draft-batch-status"),
     path("ozon/drafts/batches/", SupplyDraftBatchListView.as_view(), name="ozon-draft-batch-list"),
+    path("ozon/drafts/batches/confirmed/", SupplyDraftBatchConfirmedListView.as_view(), name="ozon-draft-batch-confirmed-list"),
     path("ozon/drafts/<int:draft_id>/select-warehouse/", SupplyDraftSelectWarehouseView.as_view(), name="ozon-draft-select-warehouse"),
     path("ozon/drafts/<int:draft_id>/", SupplyDraftDeleteView.as_view(), name="ozon-draft-delete"),
     path("ozon/drafts/timeslots/fetch/", SupplyDraftTimeslotFetchView.as_view(), name="ozon-draft-timeslot-fetch"),
     path("ozon/drafts/batch/<uuid:batch_id>/timeslots/", SupplyDraftTimeslotListView.as_view(), name="ozon-draft-timeslot-list"),
     path("ozon/drafts/batch/<uuid:batch_id>/confirm-supply/", SupplyDraftCreateSupplyView.as_view(), name="ozon-draft-confirm-supply"),
+    path("ozon/drafts/batch/<uuid:batch_id>/supply-info/", SupplyDraftSupplyStatusView.as_view(), name="ozon-draft-supply-info"),
 
 ]
