@@ -332,6 +332,7 @@ class StoreInviteListView(APIView):
         invites = (
             StoreAccess.objects.select_related("store", "invited_by")
             .filter(user=request.user)
+            .exclude(status=StoreAccess.STATUS_ACCEPTED)
             .order_by("-created_at")
         )
         data = []

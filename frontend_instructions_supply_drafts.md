@@ -223,6 +223,6 @@ Authorization: Bearer <JWT>
 - Создать приглашение (только владелец): `POST /auth/stores/<store_id>/invite/` с `{ "username": "telegram_nick" }` → вернет `status: "pending"`.
 - Принять/отклонить приглашение (адресат приглашения): `POST /auth/stores/<store_id>/invite/respond/` с `{ "decision": "accept" }` или `{ "decision": "reject" }`.
 - Пользователь с принятым доступом может работать со всеми эндпоинтами черновиков/таймслотов/планнера для этого магазина, но не может менять/удалять сам магазин и не видит ключи.
-- Список приглашений для текущего пользователя: `GET /auth/stores/invites/` → массив `{ store_id, store_name, status, invited_by, created_at }`. По нему фронт понимает, что пришло новое приглашение и показывает кнопку принять/отклонить.
+- Список приглашений для текущего пользователя: `GET /auth/stores/invites/` → массив `{ store_id, store_name, status, invited_by, created_at }`. Возвращаются только `pending`/`rejected` (accepted не отдаются). По нему фронт понимает, что пришло новое приглашение и показывает кнопку принять/отклонить.
 - Список всех пользователей с доступом к магазину (только владелец): `GET /auth/stores/<store_id>/accesses/` → `[ { user_id, username, telegram_id, status, invited_by, is_owner } ]`.
 - Отозвать доступ конкретного пользователя (только владелец): `DELETE /auth/stores/<store_id>/accesses/<user_id>/`.
