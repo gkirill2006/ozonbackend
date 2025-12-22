@@ -143,6 +143,9 @@ class OzonSupplyDraft(models.Model):
         ("in_progress", "In progress"),
         ("draft_created", "Draft created"),
         ("info_loaded", "Info loaded"),
+        ("supply_queued", "Supply queued"),
+        ("supply_in_progress", "Supply in progress"),
+        ("supply_failed", "Supply failed"),
         ("created", "Created"),
         ("failed", "Failed"),
     ]

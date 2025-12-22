@@ -43,6 +43,7 @@ from .tasks import (
     toggle_store_ads_status,
     rebalance_auto_weekly_budgets,
     sync_warehouse_stock_for_store,
+    _update_batch_status,
 )
 
 import logging
@@ -609,6 +610,9 @@ class SupplyDraftDeleteView(APIView):
 class SupplyDraftTimeslotFetchView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     OZON_TIMESLOT_URL = "https://api-seller.ozon.ru/v1/draft/timeslot/info"
+    REQUEST_DELAY_SECONDS = 1.0
+    MAX_RETRIES = 2
+    RETRY_DELAY_SECONDS = 2.0
 
     @staticmethod
     def _normalize(draft: OzonSupplyDraft):
@@ -664,7 +668,9 @@ class SupplyDraftTimeslotFetchView(APIView):
         results = []
         errors = []
 
-        for draft in batch.drafts.all():
+        drafts = list(batch.drafts.all())
+        total = len(drafts)
+        for idx, draft in enumerate(drafts):
             if not draft.draft_id:
                 errors.append({"draft_id": draft.id, "error": "draft_id missing (info not loaded)"})
                 continue
@@ -690,25 +696,42 @@ class SupplyDraftTimeslotFetchView(APIView):
                 "Api-Key": draft.store.api_key,
                 "Content-Type": "application/json",
             }
-            try:
-                resp = requests.post(self.OZON_TIMESLOT_URL, headers=headers, json=payload, timeout=30)
-            except requests.RequestException as exc:
-                errors.append({"draft_id": draft.id, "error": f"Request error: {exc}"})
-                continue
+            attempt = 0
+            while True:
+                attempt += 1
+                try:
+                    resp = requests.post(self.OZON_TIMESLOT_URL, headers=headers, json=payload, timeout=30)
+                except requests.RequestException as exc:
+                    if attempt < self.MAX_RETRIES:
+                        time.sleep(self.RETRY_DELAY_SECONDS)
+                        continue
+                    errors.append({"draft_id": draft.id, "error": f"Request error: {exc}"})
+                    break
 
-            try:
-                resp_data = resp.json()
-            except ValueError:
-                resp_data = {"raw": resp.text}
+                if resp.status_code == 429 and attempt < self.MAX_RETRIES:
+                    retry_after = resp.headers.get("Retry-After")
+                    try:
+                        delay = float(retry_after)
+                    except (TypeError, ValueError):
+                        delay = self.RETRY_DELAY_SECONDS
+                    time.sleep(delay)
+                    continue
 
-            if resp.status_code >= 400:
-                errors.append({"draft_id": draft.id, "status_code": resp.status_code, "error": resp.text})
-                continue
+                try:
+                    resp_data = resp.json()
+                except ValueError:
+                    resp_data = {"raw": resp.text}
 
-            draft.timeslot_response = resp_data
-            draft.timeslot_updated_at = timezone.now()
-            draft.save(update_fields=["timeslot_response", "timeslot_updated_at", "updated_at"])
-            results.append({"draft_id": draft.id, "timeslot_response": resp_data})
+                if resp.status_code >= 400:
+                    errors.append({"draft_id": draft.id, "status_code": resp.status_code, "error": resp_data})
+                else:
+                    draft.timeslot_response = resp_data
+                    draft.timeslot_updated_at = timezone.now()
+                    draft.save(update_fields=["timeslot_response", "timeslot_updated_at", "updated_at"])
+                    results.append({"draft_id": draft.id, "timeslot_response": resp_data})
+                break
+            if idx < total - 1:
+                time.sleep(self.REQUEST_DELAY_SECONDS)
 
         status_code = status.HTTP_207_MULTI_STATUS if errors and results else status.HTTP_200_OK
         if errors and not results:
@@ -968,11 +991,10 @@ class SupplyDraftSupplyStatusView(APIView):
 
 class SupplyDraftCreateSupplyView(APIView):
     """
-    Создает финальную заявку на поставку по всем черновикам батча с указанным тайм-слотом.
+    Ставит финальную заявку на поставку в очередь по всем черновикам батча с указанным тайм-слотом.
     """
 
     permission_classes = [permissions.IsAuthenticated]
-    OZON_SUPPLY_CREATE_URL = "https://api-seller.ozon.ru/v1/draft/supply/create"
 
     @staticmethod
     def _normalize_warehouses(draft: OzonSupplyDraft):
@@ -1015,8 +1037,8 @@ class SupplyDraftCreateSupplyView(APIView):
         errors = []
 
         for draft in batch.drafts.all():
-            if not draft.draft_id:
-                errors.append({"draft_id": draft.id, "error": "draft_id missing (info not loaded)"})
+            if draft.status == "created":
+                errors.append({"draft_id": draft.id, "error": "draft already created"})
                 continue
 
             warehouses = self._normalize_warehouses(draft)
@@ -1028,55 +1050,103 @@ class SupplyDraftCreateSupplyView(APIView):
             if not warehouse_id:
                 errors.append({"draft_id": draft.id, "error": "warehouse_id missing"})
                 continue
-
-            payload = {
-                "draft_id": draft.draft_id,
-                "timeslot": timeslot,
-                "warehouse_id": int(warehouse_id),
-            }
-            headers = {
-                "Client-Id": draft.store.client_id,
-                "Api-Key": draft.store.api_key,
-                "Content-Type": "application/json",
-            }
-            try:
-                resp = requests.post(self.OZON_SUPPLY_CREATE_URL, headers=headers, json=payload, timeout=30)
-            except requests.RequestException as exc:
-                errors.append({"draft_id": draft.id, "error": f"Request error: {exc}"})
+            if not draft.draft_id:
+                errors.append({"draft_id": draft.id, "error": "draft_id missing (info not loaded)"})
                 continue
 
-            try:
-                resp_data = resp.json()
-            except ValueError:
-                resp_data = {"raw": resp.text}
-
-            if resp.status_code >= 400:
-                errors.append({"draft_id": draft.id, "status_code": resp.status_code, "error": resp.text})
-                continue
-
-            operation_id_supply = resp_data.get("operation_id")
-            draft.operation_id_supply = operation_id_supply or ""
+            draft.operation_id_supply = ""
+            draft.supply_order_ids = None
+            draft.supply_order_response = None
+            draft.supply_bundle_items = None
             draft.selected_timeslot = timeslot
-            draft.status = "created"
-            draft.save(update_fields=["operation_id_supply", "selected_timeslot", "status", "updated_at"])
+            draft.status = "supply_queued"
+            draft.attempts = 0
+            draft.next_attempt_at = None
+            draft.error_message = ""
+            draft.save(update_fields=[
+                "operation_id_supply",
+                "supply_order_ids",
+                "supply_order_response",
+                "supply_bundle_items",
+                "selected_timeslot",
+                "status",
+                "attempts",
+                "next_attempt_at",
+                "error_message",
+                "updated_at",
+            ])
 
             results.append({
                 "draft_id": draft.id,
-                "operation_id_supply": operation_id_supply,
-                "warehouse_id": warehouse_id,
-                "timeslot": timeslot,
+                "status": "supply_queued",
             })
 
-        if results and not errors:
-            batch.status = "completed"
-        elif results and errors:
-            batch.status = "partial"
-        batch.save(update_fields=["status", "updated_at"])
+        if results:
+            batch.status = "processing"
+            batch.save(update_fields=["status", "updated_at"])
 
         status_code = status.HTTP_207_MULTI_STATUS if errors and results else status.HTTP_200_OK
         if errors and not results:
             status_code = status.HTTP_400_BAD_REQUEST
         return Response({"results": results, "errors": errors}, status=status_code)
+
+
+class SupplyDraftMoveToNewBatchView(APIView):
+    """
+    Переносит выбранный черновик в новый батч (для новой поставки).
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, batch_id: str):
+        draft_id = request.data.get("draft_id")
+        if not draft_id:
+            return Response({"error": "draft_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        batch = get_object_or_404(
+            OzonSupplyBatch,
+            batch_id=batch_id,
+            store__in=user_store_queryset(request.user),
+        )
+        try:
+            draft = OzonSupplyDraft.objects.get(id=draft_id, batch=batch)
+        except OzonSupplyDraft.DoesNotExist:
+            return Response({"error": "Draft not found in batch"}, status=status.HTTP_404_NOT_FOUND)
+
+        if draft.status == "created":
+            return Response({"error": "Draft already created, cannot be moved"}, status=status.HTTP_400_BAD_REQUEST)
+
+        store = draft.store
+        last_seq = OzonSupplyBatch.objects.filter(store=store).order_by("-batch_seq").first()
+        next_seq = (last_seq.batch_seq + 1) if last_seq else 1
+
+        new_batch = OzonSupplyBatch.objects.create(
+            store=store,
+            batch_seq=next_seq,
+            supply_type=draft.supply_type,
+            drop_off_point_warehouse_id=draft.drop_off_point_warehouse_id,
+            drop_off_point_name=draft.drop_off_point_name,
+            status="processing",
+        )
+
+        draft.batch = new_batch
+        draft.save(update_fields=["batch", "updated_at"])
+
+        if not batch.drafts.exists():
+            batch.delete()
+        else:
+            _update_batch_status(batch)
+        _update_batch_status(new_batch)
+
+        return Response(
+            {
+                "draft_id": draft.id,
+                "old_batch_id": str(batch.batch_id),
+                "new_batch_id": str(new_batch.batch_id),
+                "new_batch_seq": new_batch.batch_seq,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 # Получение конечной аналитики по продуктам
 
@@ -1251,7 +1321,7 @@ class ProductAnalytics_V2_View(APIView):
             cluster_data = {
                 "cluster_name": cluster,
                 "cluster_revenue": round(revenue_by_cluster.get(cluster, 0), 2),
-                "cluster_share_percent": round((revenue_by_cluster.get(cluster, 0) / total_revenue) * 100, 2),
+                "cluster_share_percent": round((revenue_by_cluster.get(cluster, 0) / total_revenue) * 100, 4),
                 "products": []
             }
             all_skus = set()
@@ -1930,6 +2000,13 @@ class Planer_View(APIView):
         'ozon-rec': 3,
     }
 
+    @staticmethod
+    def _round_share(value):
+        try:
+            return round(float(value), 4)
+        except (TypeError, ValueError):
+            return value
+
     def _get_filters_from_settings(self, store: OzonStore):
         settings, _ = StoreFilterSettings.objects.get_or_create(store=store)
         return {
@@ -2109,7 +2186,7 @@ class Planer_View(APIView):
         delivery_cluster_data = {
             dc.name: {
                 "average_delivery_time": dc.average_delivery_time,
-                "impact_share": dc.impact_share
+                "impact_share": self._round_share(dc.impact_share),
             }
             for dc in DeliveryCluster.objects.filter(store=ozon_store)
         }
@@ -2270,7 +2347,7 @@ class Planer_View(APIView):
                     "average_delivery_time": delivery_info["average_delivery_time"],
                     "impact_share": delivery_info["impact_share"],
                     "average_delivery_time_item": item_analytics.average_delivery_time if item_analytics else "",
-                    "impact_share_item": item_analytics.impact_share if item_analytics else "",
+                    "impact_share_item": self._round_share(item_analytics.impact_share) if item_analytics else "",
                     "recommended_supply_item": item_analytics.recommended_supply if item_analytics else "",
 
                     
@@ -2415,6 +2492,21 @@ class PlanerPivotView(Planer_View):
         summary = data.get("summary", [])
 
         cluster_order = [c.get("cluster_name") for c in clusters]
+        cluster_impact_share = {}
+        allowed_offer_ids = set()
+
+        for cluster in clusters:
+            cluster_name = cluster.get("cluster_name")
+            raw_share = cluster.get("cluster_share_percent")
+            try:
+                impact_share = round(float(raw_share), 4)
+            except (TypeError, ValueError):
+                impact_share = raw_share
+            for p in cluster.get("products", []):
+                fbs_qty = p.get("fbs_stock_total_qty") or 0
+                if fbs_qty > 0 and p.get("offer_id"):
+                    allowed_offer_ids.add(p.get("offer_id"))
+            cluster_impact_share[cluster_name] = impact_share
 
         # Собираем метаданные и распределение по кластерам
         product_meta = {}
@@ -2423,6 +2515,8 @@ class PlanerPivotView(Planer_View):
             cluster_name = cluster.get("cluster_name")
             for p in cluster.get("products", []):
                 offer_id = p.get("offer_id")
+                if offer_id not in allowed_offer_ids:
+                    continue
                 per_offer_cluster_qty[offer_id][cluster_name] = p.get("for_delivery", 0)
                 if offer_id not in product_meta:
                     product_meta[offer_id] = {
@@ -2437,6 +2531,8 @@ class PlanerPivotView(Planer_View):
         rows = []
         for item in summary:
             offer_id = item.get("offer_id")
+            if offer_id not in allowed_offer_ids:
+                continue
             meta = product_meta.get(offer_id, {})
             rows.append({
                 "offer_id": offer_id,
@@ -2454,6 +2550,7 @@ class PlanerPivotView(Planer_View):
 
         resp = Response({
             "cluster_headers": cluster_order,
+            "cluster_impact_share": cluster_impact_share,
             "products": rows,
             "execution_time_seconds": data.get("execution_time_seconds"),
             "average_delivery_time": data.get("average_delivery_time"),

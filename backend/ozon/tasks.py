@@ -50,7 +50,9 @@ logger = logging.getLogger(__name__)
 
 OZON_DRAFT_CREATE_URL = "https://api-seller.ozon.ru/v1/draft/create"
 OZON_DRAFT_INFO_URL = "https://api-seller.ozon.ru/v1/draft/create/info"
+OZON_SUPPLY_CREATE_URL = "https://api-seller.ozon.ru/v1/draft/supply/create"
 MIN_INTERVAL_SECONDS = 30  # 2 запроса в минуту
+SUPPLY_MIN_INTERVAL_SECONDS = 2
 RETRY_429_SECONDS = 60
 MAX_HOURLY_LIMIT = 50
 MAX_ATTEMPTS = 3
@@ -6757,6 +6759,7 @@ def update_manual_campaign_kpis_in_sheets(
 
 
 def _hourly_created_count(store):
+    """Считает количество созданных черновиков за час для контроля лимитов."""
     since = timezone.now() - timedelta(hours=1)
     return OzonSupplyDraft.objects.filter(
         store=store,
@@ -6766,19 +6769,21 @@ def _hourly_created_count(store):
 
 
 def _update_batch_status(batch: OzonSupplyBatch):
+    """Сводит статусы черновиков в итоговый статус батча."""
     drafts = list(batch.drafts.all())
-    if any(d.status in ("queued", "in_progress", "draft_created") for d in drafts):
+    if any(d.status in ("queued", "in_progress", "draft_created", "supply_queued", "supply_in_progress") for d in drafts):
         batch.status = "processing"
+    elif any(d.status in ("failed", "supply_failed") for d in drafts):
+        batch.status = "partial"
     elif all(d.status in ("info_loaded", "created") for d in drafts):
         batch.status = "completed"
-    elif any(d.status == "failed" for d in drafts):
-        batch.status = "partial"
     else:
         batch.status = "processing"
     batch.save(update_fields=["status", "updated_at"])
 
 
 def _call_ozon(url, headers, payload):
+    """Базовый POST-запрос в OZON с попыткой распарсить JSON."""
     resp = requests.post(url, headers=headers, json=payload, timeout=30)
     try:
         data = resp.json()
@@ -6787,7 +6792,133 @@ def _call_ozon(url, headers, payload):
     return resp, data
 
 
+def _normalize_supply_warehouses(draft: OzonSupplyDraft):
+    """Нормализует список складов к плоскому виду и сохраняет в черновике."""
+    data = draft.supply_warehouse or []
+    flat = []
+    for entry in data:
+        if isinstance(entry, dict) and entry.get("warehouse_id"):
+            flat.append(entry)
+        elif isinstance(entry, dict) and "warehouses" in entry:
+            for w in entry.get("warehouses", []):
+                sw = w.get("supply_warehouse") or {}
+                if sw.get("warehouse_id"):
+                    flat.append({
+                        **sw,
+                        "status": w.get("status"),
+                        "bundle_ids": w.get("bundle_ids"),
+                        "travel_time_days": w.get("travel_time_days"),
+                    })
+    if flat:
+        draft.supply_warehouse = flat
+        if not draft.selected_supply_warehouse:
+            draft.selected_supply_warehouse = flat[0]
+        draft.save(update_fields=["supply_warehouse", "selected_supply_warehouse", "updated_at"])
+    return flat
+
+
+def _process_supply_create(batch: OzonSupplyBatch):
+    """Фоновое создание финальных поставок (draft/supply/create)."""
+    drafts_qs = batch.drafts.filter(status__in=["supply_queued", "supply_failed", "supply_in_progress"]).order_by("created_at")
+    last_call = None
+
+    for draft in drafts_qs:
+        now = timezone.now()
+        if draft.next_attempt_at and draft.next_attempt_at > now:
+            continue
+
+        if draft.attempts >= MAX_ATTEMPTS and draft.status == "supply_failed":
+            continue
+
+        if not draft.draft_id:
+            draft.status = "supply_failed"
+            draft.error_message = "draft_id missing (info not loaded)"
+            draft.attempts = MAX_ATTEMPTS
+            draft.save(update_fields=["status", "error_message", "attempts", "updated_at"])
+            continue
+
+        if not draft.selected_timeslot:
+            draft.status = "supply_failed"
+            draft.error_message = "timeslot missing"
+            draft.attempts = MAX_ATTEMPTS
+            draft.save(update_fields=["status", "error_message", "attempts", "updated_at"])
+            continue
+
+        warehouses = _normalize_supply_warehouses(draft)
+        selected = draft.selected_supply_warehouse or (warehouses[0] if warehouses else None)
+        if not selected:
+            draft.status = "supply_failed"
+            draft.error_message = "No warehouse selected"
+            draft.attempts = MAX_ATTEMPTS
+            draft.save(update_fields=["status", "error_message", "attempts", "updated_at"])
+            continue
+
+        warehouse_id = selected.get("warehouse_id") or selected.get("id")
+        if not warehouse_id:
+            draft.status = "supply_failed"
+            draft.error_message = "warehouse_id missing"
+            draft.attempts = MAX_ATTEMPTS
+            draft.save(update_fields=["status", "error_message", "attempts", "updated_at"])
+            continue
+
+        # Троттлинг вызовов создания поставок для магазина.
+        if last_call:
+            diff = (timezone.now() - last_call).total_seconds()
+            if diff < SUPPLY_MIN_INTERVAL_SECONDS:
+                time.sleep(SUPPLY_MIN_INTERVAL_SECONDS - diff)
+
+        headers = {
+            "Client-Id": draft.store.client_id,
+            "Api-Key": draft.store.api_key,
+            "Content-Type": "application/json",
+        }
+
+        draft.status = "supply_in_progress"
+        draft.attempts += 1
+        draft.next_attempt_at = None
+        draft.error_message = ""
+        draft.save(update_fields=["status", "attempts", "next_attempt_at", "error_message", "updated_at"])
+
+        payload = {
+            "draft_id": draft.draft_id,
+            "timeslot": draft.selected_timeslot,
+            "warehouse_id": int(warehouse_id),
+        }
+
+        try:
+            resp, resp_data = _call_ozon(OZON_SUPPLY_CREATE_URL, headers, payload)
+        except requests.RequestException as exc:
+            draft.status = "supply_failed"
+            draft.error_message = f"Ошибка запроса: {exc}"
+            draft.next_attempt_at = now + timedelta(minutes=1)
+            draft.save(update_fields=["status", "error_message", "next_attempt_at", "updated_at"])
+            continue
+
+        last_call = timezone.now()
+
+        # Лимит 429: ставим в очередь с задержкой.
+        if resp.status_code == 429:
+            draft.status = "supply_queued"
+            draft.next_attempt_at = now + timedelta(seconds=RETRY_429_SECONDS)
+            draft.error_message = "Превышен лимит 429, повтор через 60с."
+            draft.save(update_fields=["status", "next_attempt_at", "error_message", "updated_at"])
+            continue
+
+        if resp.status_code >= 400:
+            draft.status = "supply_failed"
+            draft.error_message = str(resp_data)[:500]
+            draft.save(update_fields=["status", "error_message", "updated_at"])
+            continue
+
+        operation_id_supply = resp_data.get("operation_id") or ""
+        draft.operation_id_supply = operation_id_supply
+        draft.status = "created"
+        draft.error_message = ""
+        draft.save(update_fields=["operation_id_supply", "status", "error_message", "updated_at"])
+
+
 def _cleanup_stale_drafts():
+    """Удаляет старые черновики (кроме created) и пустые батчи."""
     cutoff = timezone.now() - timedelta(minutes=STALE_DRAFT_MINUTES)
     stale = OzonSupplyDraft.objects.filter(created_at__lt=cutoff).exclude(status="created")
 
@@ -6807,6 +6938,7 @@ def _cleanup_stale_drafts():
 
 
 def process_supply_batch_sync(batch_uuid: str):
+    """Основной воркер: create draft -> info -> очередь поставок -> обновление батча."""
     try:
         batch = OzonSupplyBatch.objects.get(batch_id=batch_uuid)
     except OzonSupplyBatch.DoesNotExist:
@@ -6825,6 +6957,7 @@ def process_supply_batch_sync(batch_uuid: str):
             continue
 
         if draft.status == "draft_created":
+            # Опрашиваем /draft/create/info до готовности расчета.
             # Проверяем готовность info спустя паузу
             info_payload = {"operation_id": draft.operation_id}
             headers = {
@@ -6890,6 +7023,7 @@ def process_supply_batch_sync(batch_uuid: str):
             draft.save(update_fields=["draft_id", "supply_warehouse", "selected_supply_warehouse", "response_payload", "status", "error_message", "updated_at"])
             continue
 
+        # Глобальный лимит OZON: максимум 50 черновиков в час.
         if _hourly_created_count(draft.store) >= MAX_HOURLY_LIMIT:
             draft.status = "queued"
             draft.next_attempt_at = now + timedelta(hours=1)
@@ -6897,6 +7031,7 @@ def process_supply_batch_sync(batch_uuid: str):
             draft.save(update_fields=["status", "next_attempt_at", "error_message", "updated_at"])
             continue
 
+        # Троттлинг запросов создания черновиков для магазина.
         if last_call:
             diff = (timezone.now() - last_call).total_seconds()
             if diff < MIN_INTERVAL_SECONDS:
@@ -6946,6 +7081,7 @@ def process_supply_batch_sync(batch_uuid: str):
         draft.next_attempt_at = now + timedelta(seconds=INFO_RETRY_SECONDS)
         draft.save(update_fields=["operation_id", "response_payload", "status", "next_attempt_at", "updated_at"])
 
+    _process_supply_create(batch)
     _update_batch_status(batch)
     _cleanup_stale_drafts()
 

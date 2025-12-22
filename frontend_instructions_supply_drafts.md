@@ -27,6 +27,7 @@
 - `POST /api/ozon/drafts/timeslots/fetch/`
   - Body: `{ "batch_id": "uuid", "date_from": "2025-12-19T00:00:00Z", "days": <int> }`
   - Resp: 200/207/400 `{ "results": [ { "draft_id": <int>, "timeslot_response": {...} }, ... ], "errors": [ { "draft_id": <int>, "error": "...", "status_code": <int?> }, ... ] }`
+  - Внутри запроса есть небольшая задержка между вызовами к OZON и повтор при 429 (минимум 1-2 попытки).
 
 - `GET /api/ozon/drafts/batch/<batch_id>/timeslots/`
   - Resp 200:
@@ -70,11 +71,16 @@
     }
     ```
 
+- `POST /api/ozon/drafts/batch/<batch_id>/move-draft/`
+  - Body: `{ "draft_id": <int> }`
+  - Действие: создаёт новый батч и переносит туда выбранный черновик.
+  - Resp 200: `{ "draft_id": <int>, "old_batch_id": "uuid", "new_batch_id": "uuid", "new_batch_seq": <int> }`
+
 - `POST /api/ozon/drafts/batch/<batch_id>/confirm-supply/`
   - Body: `{ "timeslot": { "from_in_timezone": "2025-12-19T09:00:00Z", "to_in_timezone": "2025-12-19T10:00:00Z" } }`
-  - Действие: для каждого черновика батча берёт выбранный склад (`selected_supply_warehouse`, если пусто — первый из списка) и отправляет в OZON `/v1/draft/supply/create` с выбранным таймслотом.
-  - Resp 200/207/400: `{ "results": [ { "draft_id": <int>, "operation_id_supply": "..." } ], "errors": [ { "draft_id": <int>, "error": "...", "status_code": <int?> } ] }`
-  - В черновик сохраняются: `operation_id_supply`, `selected_timeslot`, `status: "created"`. Батч получает статус `completed`, либо `partial` если были ошибки.
+  - Действие: **ставит черновики в очередь** на создание поставок. Фактические запросы к OZON выполняет планировщик в фоне с задержкой и повторами при 429.
+  - Resp 200/207/400: `{ "results": [ { "draft_id": <int>, "status": "supply_queued" } ], "errors": [ { "draft_id": <int>, "error": "..." } ] }`
+  - В черновик сохраняются: `selected_timeslot`, `status: "supply_queued"`. Дальше статус меняется фоном на `supply_in_progress`, `created` или `supply_failed`.
 
 - `GET /api/ozon/drafts/batch/<batch_id>/supply-info/`
   - Берёт все черновики батча со статусом `created`, для каждого вызывает:
@@ -160,6 +166,9 @@ Content-Type: application/json
 - `in_progress` — отправляем запрос в OZON.
 - `draft_created` — получили `operation_id` от `/v1/draft/create`; info-запрос повторяется каждые ~10 секунд, пока статус OZON не станет `CALCULATION_STATUS_SUCCESS`.
 - `info_loaded` — получили `draft_id` и `supply_warehouse` от `/v1/draft/create/info`; первый склад автоматически сохраняется в `selected_supply_warehouse`.
+- `supply_queued` — поставка поставлена в очередь, ожидает фонового создания.
+- `supply_in_progress` — создаём поставку в OZON.
+- `supply_failed` — ошибка создания поставки.
 - `created` — создана финальная заявка на поставку через `/v1/draft/supply/create` (хранится `operation_id_supply`, выбранный таймслот).
 - `failed` — ошибка, смотреть `error_message`.
 
@@ -213,10 +222,11 @@ Authorization: Bearer <JWT>
    - Убедиться, что у черновиков есть `draft_id` (статус `info_loaded`) и выбран склад.
    - Вызвать `POST /api/ozon/drafts/timeslots/fetch/` с `{"batch_id":"...","date_from":"<ISO UTC>","days":<int>}`. Сервер пройдётся по всем черновикам батча, запросит `/v1/draft/timeslot/info` и сохранит ответы в `timeslot_response`.
    - Читать `GET /api/ozon/drafts/batch/<batch_id>/timeslots/`: по каждому черновику → `timeslot_response`, `selected_supply_warehouse`, `selected_timeslot` (если будет выбор), `timeslot_updated_at`; поле `common_dates` — пересечение дат доступных слотов по всем черновикам.
-5. UI: подсвечивать ошибки/отложенные повторы (если `error_message` или `next_attempt_at`), показывать прогресс до `info_loaded`, давать выбор склада и слотов на основе полученных данных.
+5. Подтверждение поставок: `POST /api/ozon/drafts/batch/<batch_id>/confirm-supply/` с выбранным тайм-слотом → черновики переходят в `supply_queued`, дальше фоновый процесс создаёт поставки.
+6. UI: подсвечивать ошибки/отложенные повторы (если `error_message` или `next_attempt_at`), показывать прогресс до `created`, давать выбор склада и слотов на основе полученных данных.
 
 ### Планировщик на бэке
-- Запускается `python backend/run_scheduler.py` (в docker-сервисе `celery_scheduler`), каждые ~5 секунд проверяет батчи `queued/processing`, обрабатывает черновики с троттлингом, не допускает одновременной обработки одного магазина в нескольких потоках.
+- Запускается `python backend/run_scheduler.py` (в docker-сервисе `celery_scheduler`), каждые ~5 секунд проверяет батчи `queued/processing`, обрабатывает черновики с троттлингом, не допускает одновременной обработки одного магазина в нескольких потоках. Также в фоне создаёт поставки для черновиков со статусом `supply_queued`.
 
 ## Доступ к магазинам (шаринг)
 - `GET /auth/stores/` теперь возвращает магазины владельца **и** магазины, куда пользователя пригласили с принятым доступом. В ответе есть `is_owner` и `owner_username`. Если `is_owner=false`, чувствительные ключи (`api_key`, `performance_client_secret`) обнуляются, `client_id` отдается в маске (`abc***xyz`).

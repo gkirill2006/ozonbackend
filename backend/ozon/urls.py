@@ -26,6 +26,7 @@ from .views import (
     SupplyDraftTimeslotListView,
     SupplyDraftCreateSupplyView,
     SupplyDraftSupplyStatusView,
+    SupplyDraftMoveToNewBatchView,
 )
 urlpatterns = [
     path('ozon/products/', SyncOzonProductView.as_view()),
@@ -55,5 +56,6 @@ urlpatterns = [
     path("ozon/drafts/batch/<uuid:batch_id>/timeslots/", SupplyDraftTimeslotListView.as_view(), name="ozon-draft-timeslot-list"),
     path("ozon/drafts/batch/<uuid:batch_id>/confirm-supply/", SupplyDraftCreateSupplyView.as_view(), name="ozon-draft-confirm-supply"),
     path("ozon/drafts/batch/<uuid:batch_id>/supply-info/", SupplyDraftSupplyStatusView.as_view(), name="ozon-draft-supply-info"),
+    path("ozon/drafts/batch/<uuid:batch_id>/move-draft/", SupplyDraftMoveToNewBatchView.as_view(), name="ozon-draft-move"),
 
 ]
