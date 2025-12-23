@@ -42,7 +42,8 @@ ALLOWED_HOSTS = [
     "94.141.122.224",
     "188.68.222.242",
     "ozon.codemark.me",
-    "checkyourstore.online"
+    "checkyourstore.online",
+    "185.22.155.234"
 ]
 CSRF_TRUSTED_ORIGINS = [
     'http://markets-backend:8000',
