@@ -1279,7 +1279,7 @@ class ProductAnalytics_V2_View(APIView):
         since_date = timezone.now() - timedelta(days=days-1)
         since_date = since_date.replace(hour=0, minute=0, second=0, microsecond=0)
         # Все товары
-        products = Product.objects.filter(
+        products_qs = Product.objects.filter(
             store=ozon_store,
             price__gte=price_min,
             price__lte=price_max
@@ -1287,12 +1287,21 @@ class ProductAnalytics_V2_View(APIView):
         
         # Исключаем товары по артикулам, если указаны
         if exclude_offer_ids:
-            products = products.exclude(offer_id__in=exclude_offer_ids)
+            products_qs = products_qs.exclude(offer_id__in=exclude_offer_ids)
+        query_start = time.perf_counter()
+        products = list(products_qs)
+        products_query_sec = round(time.perf_counter() - query_start, 4)
+        map_start = time.perf_counter()
         products_by_sku = {p.sku: p for p in products}
         # logging.info(f" Target SKU ={products_by_sku.get(2909660721)}")
         # Создаем словарь для получения barcode по offer_id
         offer_id_to_barcode = {p.offer_id: p.barcodes[0] if p.barcodes else None for p in products}
         product_count = len(products_by_sku)
+        products_map_sec = round(time.perf_counter() - map_start, 4)
+        timings["products_query_sec"] = products_query_sec
+        timings["products_map_sec"] = products_map_sec
+        logging.info("Planner products_query_sec=%s products=%s", products_query_sec, len(products))
+        logging.info("Planner products_map_sec=%s products=%s", products_map_sec, product_count)
         stage_start = mark("products_sec", stage_start, f"products={product_count}")
         
         
@@ -2198,19 +2207,28 @@ class Planer_View(APIView):
         since_date = timezone.now() - timedelta(days=days-1)
         since_date = since_date.replace(hour=0, minute=0, second=0, microsecond=0)
         # Все товары
-        products = Product.objects.filter(
+        products_qs = Product.objects.filter(
             store=ozon_store,
             price__gte=price_min,
             price__lte=price_max
         )
-        
+
         # Исключаем товары по артикулам, если указаны
         if exclude_offer_ids:
-            products = products.exclude(offer_id__in=exclude_offer_ids)
+            products_qs = products_qs.exclude(offer_id__in=exclude_offer_ids)
+        query_start = time.perf_counter()
+        products = list(products_qs)
+        products_query_sec = round(time.perf_counter() - query_start, 4)
+        timings["products_query_sec"] = products_query_sec
+        logging.info("Planner products_query_sec=%s products=%s", products_query_sec, len(products))
+        map_start = time.perf_counter()
         products_by_sku = {p.sku: p for p in products}
         # logging.info(f" Target SKU ={products_by_sku.get(2909660721)}")
         # Создаем словарь для получения barcode по offer_id
         offer_id_to_barcode = {p.offer_id: p.barcodes[0] if p.barcodes else None for p in products}
+        products_map_sec = round(time.perf_counter() - map_start, 4)
+        timings["products_map_sec"] = products_map_sec
+        logging.info("Planner products_map_sec=%s products=%s", products_map_sec, len(products_by_sku))
         product_count = len(products_by_sku)
         stage_start = mark("products_sec", stage_start, f"products={product_count}")
         
@@ -2218,38 +2236,59 @@ class Planer_View(APIView):
 
         # Продажи
         logging.info(f"Дата до которой смотрим {since_date}")
-        sales = Sale.objects.filter(store=ozon_store, date__gte=since_date, sale_type__in=[Sale.FBO, Sale.FBS])
+        sales_qs = Sale.objects.filter(
+            store=ozon_store,
+            date__gte=since_date,
+            sale_type__in=[Sale.FBO, Sale.FBS]
+        )
+        query_start = time.perf_counter()
+        sales = list(sales_qs)
+        sales_query_sec = round(time.perf_counter() - query_start, 4)
+        timings["sales_query_sec"] = sales_query_sec
+        logging.info("Planner sales_query_sec=%s sales=%s", sales_query_sec, len(sales))
         sales_by_cluster = {}
-        sales_count = 0
+        sales_count = len(sales)
+        agg_start = time.perf_counter()
         for s in sales:
-            sales_count += 1
             cluster = s.cluster_to or "Без кластера"
             sales_by_cluster.setdefault(cluster, {})
             sales_by_cluster[cluster].setdefault(s.sku, {"qty": 0, "price": 0})
             sales_by_cluster[cluster][s.sku]["qty"] += s.quantity
             sales_by_cluster[cluster][s.sku]["price"] += float(s.price)*s.quantity
+        sales_agg_sec = round(time.perf_counter() - agg_start, 4)
+        timings["sales_agg_sec"] = sales_agg_sec
+        logging.info("Planner sales_agg_sec=%s clusters=%s", sales_agg_sec, len(sales_by_cluster))
 
         logging.info(f"Кол-во продаж {sales_count}")
         logging.info(f"Кол-во кластеров  {len(sales_by_cluster)}")
         
         # Посчитаем количество продаж по каждой позиции SKU и получим по каждому товару количество продаж
-        product_revenue_map_qty = {}  
+        rollup_start = time.perf_counter()
+        product_revenue_map_qty = {}
         for cluster in sales_by_cluster:
             for sku, data in sales_by_cluster[cluster].items():
                 product_revenue_map_qty.setdefault(sku, 0)
                 product_revenue_map_qty[sku] += data["qty"]
+        sales_rollup_sec = round(time.perf_counter() - rollup_start, 4)
+        timings["sales_rollup_sec"] = sales_rollup_sec
+        logging.info("Planner sales_rollup_sec=%s unique_skus=%s", sales_rollup_sec, len(product_revenue_map_qty))
                 
         logging.info(f"Количество уникальных SKU product_revenue_map_qty =  {len(product_revenue_map_qty)}")  
         stage_start = mark("sales_sec", stage_start, f"sales={sales_count} clusters={len(sales_by_cluster)}")
               
         # Остатки товаров по складам
-        stocks = WarehouseStock.objects.filter(store=ozon_store)
+        stocks_qs = WarehouseStock.objects.filter(store=ozon_store)
+        query_start = time.perf_counter()
+        stocks = list(stocks_qs)
+        stocks_query_sec = round(time.perf_counter() - query_start, 4)
+        timings["stocks_query_sec"] = stocks_query_sec
+        logging.info("Planner stocks_query_sec=%s stocks=%s", stocks_query_sec, len(stocks))
         stocks_by_cluster = {}
         total_stock_all_clusters = {}
         requested_stock_by_sku = {}  # Отдельный расчет товаров в заявках на поставку
-        stocks_count = 0
+        stocks_count = len(stocks)
+        agg_start = time.perf_counter()
         for stock in stocks:
-            stocks_count += 1
             cluster = stock.cluster_name or "Без кластера"
             stock_sum = (
                 stock.available_stock_count +
@@ -2281,18 +2320,29 @@ class Planer_View(APIView):
             if stock.sku not in requested_stock_by_sku:
                 requested_stock_by_sku[stock.sku] = 0
             requested_stock_by_sku[stock.sku] += stock.requested_stock_count
+        stocks_agg_sec = round(time.perf_counter() - agg_start, 4)
+        timings["stocks_agg_sec"] = stocks_agg_sec
+        logging.info("Planner stocks_agg_sec=%s clusters=%s", stocks_agg_sec, len(stocks_by_cluster))
             
         logging.info(f"Остатки товаров по складам  {stocks_count}")
         # logging.info(f"Заявки на поставку по SKU 1928741963 {requested_stock_by_sku[1928741963]}")
         stage_start = mark("stocks_sec", stage_start, f"stocks={stocks_count}")
         # FBS остатки
-        fbs_stocks = FbsStock.objects.filter(store=ozon_store)
+        fbs_qs = FbsStock.objects.filter(store=ozon_store)
+        query_start = time.perf_counter()
+        fbs_stocks = list(fbs_qs)
+        fbs_query_sec = round(time.perf_counter() - query_start, 4)
+        timings["fbs_query_sec"] = fbs_query_sec
+        logging.info("Planner fbs_query_sec=%s fbs=%s", fbs_query_sec, len(fbs_stocks))
         fbs_by_sku = {}
-        fbs_count = 0
+        fbs_count = len(fbs_stocks)
+        agg_start = time.perf_counter()
         for f in fbs_stocks:
-            fbs_count += 1
             fbs_by_sku.setdefault(f.sku, 0)
             fbs_by_sku[f.sku] += f.present
+        fbs_agg_sec = round(time.perf_counter() - agg_start, 4)
+        timings["fbs_agg_sec"] = fbs_agg_sec
+        logging.info("Planner fbs_agg_sec=%s fbs=%s", fbs_agg_sec, len(fbs_by_sku))
         stage_start = mark("fbs_stocks_sec", stage_start, f"fbs_stocks={fbs_count}")
 
 
@@ -2316,21 +2366,54 @@ class Planer_View(APIView):
 
         
         # Получаем данные по кластерам доставки average_delivery_time impact_share
+        delivery_qs = DeliveryCluster.objects.filter(store=ozon_store)
+        query_start = time.perf_counter()
+        delivery_clusters = list(delivery_qs)
+        delivery_cluster_query_sec = round(time.perf_counter() - query_start, 4)
+        timings["delivery_cluster_query_sec"] = delivery_cluster_query_sec
+        logging.info(
+            "Planner delivery_cluster_query_sec=%s clusters=%s",
+            delivery_cluster_query_sec,
+            len(delivery_clusters),
+        )
+        map_start = time.perf_counter()
         delivery_cluster_data = {
             dc.name: {
                 "average_delivery_time": dc.average_delivery_time,
                 "impact_share": self._round_share(dc.impact_share),
             }
-            for dc in DeliveryCluster.objects.filter(store=ozon_store)
+            for dc in delivery_clusters
         }
+        delivery_cluster_map_sec = round(time.perf_counter() - map_start, 4)
+        timings["delivery_cluster_map_sec"] = delivery_cluster_map_sec
+        logging.info(
+            "Planner delivery_cluster_map_sec=%s clusters=%s",
+            delivery_cluster_map_sec,
+            len(delivery_cluster_data),
+        )
 
         
         # Получаем аналитику по товарам в кластерах доставки
         # ЧАСТНАЯ АНАЛИТИКА ПО КЛАСТЕРУ
-        item_analytics_map = {
-            (a.cluster_name, a.sku): a
-            for a in DeliveryClusterItemAnalytics.objects.filter(store=ozon_store)
-        }
+        analytics_qs = DeliveryClusterItemAnalytics.objects.filter(store=ozon_store)
+        query_start = time.perf_counter()
+        analytics_items = list(analytics_qs)
+        delivery_item_analytics_query_sec = round(time.perf_counter() - query_start, 4)
+        timings["delivery_item_analytics_query_sec"] = delivery_item_analytics_query_sec
+        logging.info(
+            "Planner delivery_item_analytics_query_sec=%s items=%s",
+            delivery_item_analytics_query_sec,
+            len(analytics_items),
+        )
+        map_start = time.perf_counter()
+        item_analytics_map = {(a.cluster_name, a.sku): a for a in analytics_items}
+        delivery_item_analytics_map_sec = round(time.perf_counter() - map_start, 4)
+        timings["delivery_item_analytics_map_sec"] = delivery_item_analytics_map_sec
+        logging.info(
+            "Planner delivery_item_analytics_map_sec=%s items=%s",
+            delivery_item_analytics_map_sec,
+            len(item_analytics_map),
+        )
         stage_start = mark(
             "delivery_analytics_sec",
             stage_start,
