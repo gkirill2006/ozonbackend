@@ -876,6 +876,9 @@ class SupplyDraftSupplyStatusView(APIView):
     OZON_SUPPLY_STATUS_URL = "https://api-seller.ozon.ru/v1/draft/supply/create/status"
     OZON_SUPPLY_GET_URL = "https://api-seller.ozon.ru/v3/supply-order/get"
     OZON_SUPPLY_BUNDLE_URL = "https://api-seller.ozon.ru/v1/supply-order/bundle"
+    REQUEST_DELAY_SECONDS = 1.0
+    MAX_RETRIES = 2
+    RETRY_DELAY_SECONDS = 2.0
 
     def _call(self, url, headers, payload):
         resp = requests.post(url, headers=headers, json=payload, timeout=30)
@@ -894,9 +897,29 @@ class SupplyDraftSupplyStatusView(APIView):
 
         results = []
         errors = []
+        refresh = str(request.query_params.get("refresh", "")).lower() in ("1", "true", "yes")
 
-        for draft in batch.drafts.all():
+        drafts = list(batch.drafts.all())
+        total = len(drafts)
+        for idx, draft in enumerate(drafts):
             if draft.status != "created" or not draft.operation_id_supply:
+                continue
+
+            if not refresh and draft.supply_status_updated_at and draft.supply_order_response:
+                orders = (draft.supply_order_response or {}).get("orders") or []
+                results.append(
+                    {
+                        "draft_id": draft.id,
+                        "order_ids": draft.supply_order_ids or [],
+                        "orders": orders,
+                        "order_states": [o.get("state") for o in orders if isinstance(o, dict)],
+                        "bundle_items": draft.supply_bundle_items or [],
+                        "cached": True,
+                        "supply_status_updated_at": draft.supply_status_updated_at,
+                    }
+                )
+                if idx < total - 1:
+                    time.sleep(self.REQUEST_DELAY_SECONDS)
                 continue
 
             headers = {
@@ -907,20 +930,54 @@ class SupplyDraftSupplyStatusView(APIView):
 
             # 1) статус создания заявки
             status_payload = {"operation_id": draft.operation_id_supply}
-            resp, status_data = self._call(self.OZON_SUPPLY_STATUS_URL, headers, status_payload)
+            attempt = 0
+            while True:
+                attempt += 1
+                resp, status_data = self._call(self.OZON_SUPPLY_STATUS_URL, headers, status_payload)
+                if resp.status_code == 429 and attempt < self.MAX_RETRIES:
+                    retry_after = resp.headers.get("Retry-After")
+                    try:
+                        delay = float(retry_after)
+                    except (TypeError, ValueError):
+                        delay = self.RETRY_DELAY_SECONDS
+                    time.sleep(delay)
+                    continue
+                if resp.status_code >= 400:
+                    errors.append({"draft_id": draft.id, "error": status_data, "status_code": resp.status_code})
+                    break
+                break
             if resp.status_code >= 400:
-                errors.append({"draft_id": draft.id, "error": status_data, "status_code": resp.status_code})
+                if idx < total - 1:
+                    time.sleep(self.REQUEST_DELAY_SECONDS)
                 continue
             order_ids = (status_data.get("result") or {}).get("order_ids") or []
             if not order_ids:
                 errors.append({"draft_id": draft.id, "error": "order_ids empty"})
+                if idx < total - 1:
+                    time.sleep(self.REQUEST_DELAY_SECONDS)
                 continue
 
             # 2) детали заказов
             get_payload = {"order_ids": order_ids}
-            resp, orders_data = self._call(self.OZON_SUPPLY_GET_URL, headers, get_payload)
+            attempt = 0
+            while True:
+                attempt += 1
+                resp, orders_data = self._call(self.OZON_SUPPLY_GET_URL, headers, get_payload)
+                if resp.status_code == 429 and attempt < self.MAX_RETRIES:
+                    retry_after = resp.headers.get("Retry-After")
+                    try:
+                        delay = float(retry_after)
+                    except (TypeError, ValueError):
+                        delay = self.RETRY_DELAY_SECONDS
+                    time.sleep(delay)
+                    continue
+                if resp.status_code >= 400:
+                    errors.append({"draft_id": draft.id, "error": orders_data, "status_code": resp.status_code})
+                    break
+                break
             if resp.status_code >= 400:
-                errors.append({"draft_id": draft.id, "error": orders_data, "status_code": resp.status_code})
+                if idx < total - 1:
+                    time.sleep(self.REQUEST_DELAY_SECONDS)
                 continue
             orders = orders_data.get("orders") or []
 
@@ -951,27 +1008,46 @@ class SupplyDraftSupplyStatusView(APIView):
                     "limit": 100,
                     "sort_field": "UNSPECIFIED",
                 }
-                resp, bundle_data = self._call(self.OZON_SUPPLY_BUNDLE_URL, headers, bundle_payload)
-                if resp.status_code >= 400:
-                    errors.append({"draft_id": draft.id, "error": bundle_data, "status_code": resp.status_code})
-                else:
-                    for item in bundle_data.get("items") or []:
-                        bundle_items.append(
-                            {
-                                "sku": item.get("sku"),
-                                "quantity": item.get("quantity"),
-                                "offer_id": item.get("offer_id"),
-                                "icon_path": item.get("icon_path"),
-                                "name": item.get("name"),
-                                "barcode": item.get("barcode"),
-                                "product_id": item.get("product_id"),
-                            }
-                        )
+                attempt = 0
+                while True:
+                    attempt += 1
+                    resp, bundle_data = self._call(self.OZON_SUPPLY_BUNDLE_URL, headers, bundle_payload)
+                    if resp.status_code == 429 and attempt < self.MAX_RETRIES:
+                        retry_after = resp.headers.get("Retry-After")
+                        try:
+                            delay = float(retry_after)
+                        except (TypeError, ValueError):
+                            delay = self.RETRY_DELAY_SECONDS
+                        time.sleep(delay)
+                        continue
+                    if resp.status_code >= 400:
+                        errors.append({"draft_id": draft.id, "error": bundle_data, "status_code": resp.status_code})
+                    else:
+                        for item in bundle_data.get("items") or []:
+                            bundle_items.append(
+                                {
+                                    "sku": item.get("sku"),
+                                    "quantity": item.get("quantity"),
+                                    "offer_id": item.get("offer_id"),
+                                    "icon_path": item.get("icon_path"),
+                                    "name": item.get("name"),
+                                    "barcode": item.get("barcode"),
+                                    "product_id": item.get("product_id"),
+                                }
+                            )
+                    break
 
             draft.supply_order_ids = order_ids
             draft.supply_order_response = orders_data
             draft.supply_bundle_items = bundle_items
-            draft.save(update_fields=["supply_order_ids", "supply_order_response", "supply_bundle_items", "updated_at"])
+            draft.supply_status_updated_at = timezone.now()
+            draft.save(update_fields=[
+                "supply_order_ids",
+                "supply_order_response",
+                "supply_bundle_items",
+                "supply_status_updated_at",
+                "updated_at",
+            ])
 
             results.append(
                 {
@@ -980,8 +1056,12 @@ class SupplyDraftSupplyStatusView(APIView):
                     "orders": orders,
                     "order_states": [o.get("state") for o in orders if isinstance(o, dict)],
                     "bundle_items": bundle_items,
+                    "cached": False,
+                    "supply_status_updated_at": draft.supply_status_updated_at,
                 }
             )
+            if idx < total - 1:
+                time.sleep(self.REQUEST_DELAY_SECONDS)
 
         status_code = status.HTTP_207_MULTI_STATUS if errors and results else status.HTTP_200_OK
         if errors and not results:

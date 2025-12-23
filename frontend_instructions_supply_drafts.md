@@ -83,6 +83,7 @@
   - В черновик сохраняются: `selected_timeslot`, `status: "supply_queued"`. Дальше статус меняется фоном на `supply_in_progress`, `created` или `supply_failed`.
 
 - `GET /api/ozon/drafts/batch/<batch_id>/supply-info/`
+  - Query: `?refresh=1` (форсирует повторные запросы к OZON и обновление данных).
   - Берёт все черновики батча со статусом `created`, для каждого вызывает:
     1) `/v1/draft/supply/create/status` по `operation_id_supply` → `order_ids`
     2) `/v3/supply-order/get` по `order_ids`
@@ -98,19 +99,23 @@
           "order_states": ["DATA_FILLING", "READY_TO_SUPPLY"],
           "bundle_items": [
             { "sku": 1010410937, "quantity": 23, "offer_id": "...", "icon_path": "...", "name": "...", "barcode": "...", "product_id": 534151104 }
-          ]
+          ],
+          "cached": false,
+          "supply_status_updated_at": "ISO"
         }
       ],
       "errors": [ { "draft_id": 101, "error": "...", "status_code": 400 } ]
     }
     ```
   - В черновике сохраняются `supply_order_ids`, `supply_order_response`, `supply_bundle_items` (их же можно брать из обычного списка батчей).
+  - Если данные уже сохранены и `refresh` не указан, вернётся кэш (поле `cached: true`) без запросов к OZON.
 
 ### Что фронт получает для поставок
 - В черновике (и в списках батчей/подтвержденных батчей):
   - `supply_order_ids` — идентификаторы заявок;
   - `supply_order_states` — статусы заявок (`DATA_FILLING`, `READY_TO_SUPPLY`, `ACCEPTED_AT_SUPPLY_WAREHOUSE`, `IN_TRANSIT`, `ACCEPTANCE_AT_STORAGE_WAREHOUSE`, `REPORTS_CONFIRMATION_AWAITING`, `REPORT_REJECTED`, `COMPLETED`, `REJECTED_AT_SUPPLY_WAREHOUSE`, `CANCELLED`, `OVERDUE`, `UNSPECIFIED`);
   - `supply_bundle_items` — товары в поставке: `sku`, `quantity`, `offer_id`, `icon_path`, `name`, `barcode`, `product_id`.
+  - `supply_status_updated_at` — когда последний раз обновляли данные поставки.
 - Через `GET /api/ozon/drafts/batch/<batch_id>/supply-info/` сразу приходят `order_states` и `bundle_items` (их же сохраняем в черновик).
 
 ### Формат запроса на создание (аналог `war_data.json`)

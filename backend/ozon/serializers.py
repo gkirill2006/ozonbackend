@@ -57,6 +57,7 @@ class SupplyDraftSerializer(serializers.ModelSerializer):
             "supply_order_response",
             "supply_bundle_items",
             "supply_order_states",
+            "supply_status_updated_at",
             "created_at",
             "updated_at",
         ]

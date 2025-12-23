@@ -166,6 +166,7 @@ class OzonSupplyDraft(models.Model):
     supply_order_ids = models.JSONField(null=True, blank=True)
     supply_order_response = models.JSONField(null=True, blank=True)
     supply_bundle_items = models.JSONField(null=True, blank=True)
+    supply_status_updated_at = models.DateTimeField(null=True, blank=True)
     supply_warehouse = models.JSONField(null=True, blank=True)
     selected_supply_warehouse = models.JSONField(null=True, blank=True)
     timeslot_response = models.JSONField(null=True, blank=True)
