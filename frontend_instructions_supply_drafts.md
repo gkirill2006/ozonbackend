@@ -16,6 +16,52 @@
 - `GET /api/ozon/drafts/batches/confirmed/?store_id=<id>` (опц. store_id)
   - Батчи, где все черновики в статусе `created` (подтвержденные поставки).
   - Формат как у списка батчей, но в `drafts` будут только `created` черновики с полями `operation_id_supply`, `selected_timeslot`, `supply_order_ids`, `supply_bundle_items` и т.д.
+  - Структура для фронта (ключевые поля):
+    ```json
+    [
+      {
+        "batch_id": "uuid",
+        "batch_seq": 12,
+        "store": 1,
+        "status": "completed",
+        "drop_off_point_warehouse_id": 21896333622000,
+        "drop_off_point_name": "САНКТ-ПЕТЕРБУРГ_РФЦ_Кроссдокинг",
+        "created_at": "ISO",
+        "drafts": [
+          {
+            "id": 101,
+            "logistic_cluster_name": "Краснодар",
+            "operation_id_supply": "019b....",
+            "draft_id": 78321044,
+            "selected_supply_warehouse": {
+              "warehouse_id": 1020001007805000,
+              "name": "ВОРОНЕЖ_2_РФЦ",
+              "address": "..."
+            },
+            "selected_timeslot": {
+              "from_in_timezone": "2026-01-15T12:00:00Z",
+              "to_in_timezone": "2026-01-15T13:00:00Z"
+            },
+            "supply_order_ids": [80537687],
+            "supply_order_states": ["DATA_FILLING"],
+            "supply_status_updated_at": "ISO",
+            "supply_bundle_items": [
+              {
+                "sku": 1010410937,
+                "quantity": 23,
+                "offer_id": "DREAM WF4",
+                "icon_path": "https://...",
+                "name": "Прикуриватель...",
+                "barcode": "2000000016948",
+                "product_id": 534151104
+              }
+            ]
+          }
+        ]
+      }
+    ]
+    ```
+  - Если нужно подтянуть свежие данные по заказам/товарам, вызовите `GET /api/ozon/drafts/batch/<batch_id>/supply-info/?refresh=1`, после этого данные в `supply_*` обновятся.
 
 - `POST /api/ozon/drafts/<draft_id>/select-warehouse/`
   - Body: `{ "warehouse_id": "<id из supply_warehouse>" }`

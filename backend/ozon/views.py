@@ -1238,6 +1238,17 @@ class ProductAnalytics_V2_View(APIView):
         logging.info("Query: %s", request.query_params)
         logging.info("Body: %s", request.data)        
         start_time = time.time()
+        timings = {}
+        stage_start = time.perf_counter()
+
+        def mark(stage_name, started_at, extra=None):
+            duration = round(time.perf_counter() - started_at, 4)
+            timings[stage_name] = duration
+            if extra:
+                logging.info("Analytics stage=%s sec=%s %s", stage_name, duration, extra)
+            else:
+                logging.info("Analytics stage=%s sec=%s", stage_name, duration)
+            return time.perf_counter()
         api_key = request.data.get("Api-Key")
         client_id = request.data.get("client_id")
         days = int(request.data.get("days", 30))
@@ -1281,7 +1292,8 @@ class ProductAnalytics_V2_View(APIView):
         # logging.info(f" Target SKU ={products_by_sku.get(2909660721)}")
         # Создаем словарь для получения barcode по offer_id
         offer_id_to_barcode = {p.offer_id: p.barcodes[0] if p.barcodes else None for p in products}
-        stage_start = mark("products_sec", stage_start)
+        product_count = len(products_by_sku)
+        stage_start = mark("products_sec", stage_start, f"products={product_count}")
         
         
 
@@ -1289,14 +1301,16 @@ class ProductAnalytics_V2_View(APIView):
         logging.info(f"Дата до которой смотрим {since_date}")
         sales = Sale.objects.filter(store=ozon_store, date__gte=since_date, sale_type__in=[Sale.FBO, Sale.FBS])
         sales_by_cluster = {}
-        logging.info(f"Кол-во продаж {len(sales)}")
+        sales_count = 0
         for s in sales:
+            sales_count += 1
             cluster = s.cluster_to or "Без кластера"
             sales_by_cluster.setdefault(cluster, {})
             sales_by_cluster[cluster].setdefault(s.sku, {"qty": 0, "price": 0})
             sales_by_cluster[cluster][s.sku]["qty"] += s.quantity
             sales_by_cluster[cluster][s.sku]["price"] += float(s.price)*s.quantity
 
+        logging.info(f"Кол-во продаж {sales_count}")
         logging.info(f"Кол-во кластеров  {len(sales_by_cluster)}")
         
         # Посчитаем количество продаж по каждой позиции SKU и получим по каждому товару количество продаж
@@ -1307,16 +1321,16 @@ class ProductAnalytics_V2_View(APIView):
                 product_revenue_map_qty[sku] += data["qty"]
                 
         logging.info(f"Количество уникальных SKU product_revenue_map_qty =  {len(product_revenue_map_qty)}")  
-        stage_start = mark("sales_sec", stage_start)
+        stage_start = mark("sales_sec", stage_start, f"sales={sales_count} clusters={len(sales_by_cluster)}")
               
         # Остатки товаров по складам
         stocks = WarehouseStock.objects.filter(store=ozon_store)
         stocks_by_cluster = {}
         total_stock_all_clusters = {}
         requested_stock_by_sku = {}  # Отдельный расчет товаров в заявках на поставку
-        logging.info(f"Остатки товаров по складам  {len(stocks)}")
-        
+        stocks_count = 0
         for stock in stocks:
+            stocks_count += 1
             cluster = stock.cluster_name or "Без кластера"
             stock_sum = (
                 stock.available_stock_count +
@@ -1349,15 +1363,18 @@ class ProductAnalytics_V2_View(APIView):
                 requested_stock_by_sku[stock.sku] = 0
             requested_stock_by_sku[stock.sku] += stock.requested_stock_count
             
+        logging.info(f"Остатки товаров по складам  {stocks_count}")
         # logging.info(f"Заявки на поставку по SKU 1928741963 {requested_stock_by_sku[1928741963]}")
-        stage_start = mark("stocks_sec", stage_start)
+        stage_start = mark("stocks_sec", stage_start, f"stocks={stocks_count}")
         # FBS остатки
         fbs_stocks = FbsStock.objects.filter(store=ozon_store)
         fbs_by_sku = {}
+        fbs_count = 0
         for f in fbs_stocks:
+            fbs_count += 1
             fbs_by_sku.setdefault(f.sku, 0)
             fbs_by_sku[f.sku] += f.present
-        stage_start = mark("fbs_stocks_sec", stage_start)
+        stage_start = mark("fbs_stocks_sec", stage_start, f"fbs_stocks={fbs_count}")
 
 
 
@@ -1375,7 +1392,7 @@ class ProductAnalytics_V2_View(APIView):
                 product_revenue_map[sku] += data["price"]
 
         total_revenue = sum(revenue_by_cluster.values()) or 1  # защита от деления на 0
-        stage_start = mark("revenue_sec", stage_start)
+        stage_start = mark("revenue_sec", stage_start, f"total_revenue={round(total_revenue, 2)}")
 
         
         # Получаем данные по кластерам доставки average_delivery_time impact_share
@@ -1394,7 +1411,11 @@ class ProductAnalytics_V2_View(APIView):
             (a.cluster_name, a.sku): a
             for a in DeliveryClusterItemAnalytics.objects.filter(store=ozon_store)
         }
-        stage_start = mark("delivery_analytics_sec", stage_start)
+        stage_start = mark(
+            "delivery_analytics_sec",
+            stage_start,
+            f"clusters={len(delivery_cluster_data)} items={len(item_analytics_map)}",
+        )
         
         # 2. Финальная сборка по кластерам
         all_clusters = set(sales_by_cluster) | set(stocks_by_cluster)
@@ -1573,8 +1594,6 @@ class ProductAnalytics_V2_View(APIView):
                         "total_for_delivery": qty
                     } for offer_id, qty in offer_delivery_totals.items()
                 ]
-
-        stage_start = mark("clusters_build_sec", stage_start)
         # Пересчет for_delivery для обязательных товаров после всех основных расчетов
         if mandatory_products:
             # Сначала собираем информацию о том, в каких кластерах есть обязательные товары
@@ -1653,12 +1672,10 @@ class ProductAnalytics_V2_View(APIView):
                     "total_for_delivery": qty
                 } for offer_id, qty in offer_delivery_totals.items()
             ]
-
-        stage_start = mark("mandatory_rebalance_sec", stage_start)
         # сортировка кластеров по выручке
         cluster_list.sort(key=lambda c: c["cluster_revenue"], reverse=True)
         summary.sort(key=lambda c: c["total_for_delivery"], reverse=True)
-        stage_start = mark("sorting_sec", stage_start)
+        stage_start = mark("sorting_sec", stage_start, f"clusters={len(cluster_list)} summary={len(summary)}")
 
         # Сводная аналитика доставки
         try:
@@ -1667,6 +1684,7 @@ class ProductAnalytics_V2_View(APIView):
             average_time = None        
         execution_time = round(time.time() - start_time, 3)
         logging.info(f"[⏱] Время выполнения запроса: {execution_time}s")
+        logging.info("Analytics timings store=%s %s", ozon_store.id, timings)
         resp = Response({
             "clusters": cluster_list,
             "summary": summary,
@@ -2123,8 +2141,13 @@ class Planer_View(APIView):
         timings = {}
         stage_start = time.perf_counter()
 
-        def mark(stage_name, started_at):
-            timings[stage_name] = round(time.perf_counter() - started_at, 4)
+        def mark(stage_name, started_at, extra=None):
+            duration = round(time.perf_counter() - started_at, 4)
+            timings[stage_name] = duration
+            if extra:
+                logging.info("Planner stage=%s sec=%s %s", stage_name, duration, extra)
+            else:
+                logging.info("Planner stage=%s sec=%s", stage_name, duration)
             return time.perf_counter()
 
         store_id = request.data.get("store_id") or request.query_params.get("store_id")
@@ -2151,7 +2174,7 @@ class Planer_View(APIView):
         f10 = filters["f10"]
         exclude_offer_ids = filters["exclude_offer_ids"]
         mandatory_products = filters["mandatory_products"]
-        stage_start = mark("filters_sec", stage_start)
+        stage_start = mark("filters_sec", stage_start, f"store={ozon_store.id}")
 
         logging.info(
             "Planner request store=%s days=%s sort_by=%s period=%s price_range=(%s,%s) "
@@ -2188,6 +2211,8 @@ class Planer_View(APIView):
         # logging.info(f" Target SKU ={products_by_sku.get(2909660721)}")
         # Создаем словарь для получения barcode по offer_id
         offer_id_to_barcode = {p.offer_id: p.barcodes[0] if p.barcodes else None for p in products}
+        product_count = len(products_by_sku)
+        stage_start = mark("products_sec", stage_start, f"products={product_count}")
         
         
 
@@ -2195,14 +2220,16 @@ class Planer_View(APIView):
         logging.info(f"Дата до которой смотрим {since_date}")
         sales = Sale.objects.filter(store=ozon_store, date__gte=since_date, sale_type__in=[Sale.FBO, Sale.FBS])
         sales_by_cluster = {}
-        logging.info(f"Кол-во продаж {len(sales)}")
+        sales_count = 0
         for s in sales:
+            sales_count += 1
             cluster = s.cluster_to or "Без кластера"
             sales_by_cluster.setdefault(cluster, {})
             sales_by_cluster[cluster].setdefault(s.sku, {"qty": 0, "price": 0})
             sales_by_cluster[cluster][s.sku]["qty"] += s.quantity
             sales_by_cluster[cluster][s.sku]["price"] += float(s.price)*s.quantity
 
+        logging.info(f"Кол-во продаж {sales_count}")
         logging.info(f"Кол-во кластеров  {len(sales_by_cluster)}")
         
         # Посчитаем количество продаж по каждой позиции SKU и получим по каждому товару количество продаж
@@ -2213,15 +2240,16 @@ class Planer_View(APIView):
                 product_revenue_map_qty[sku] += data["qty"]
                 
         logging.info(f"Количество уникальных SKU product_revenue_map_qty =  {len(product_revenue_map_qty)}")  
+        stage_start = mark("sales_sec", stage_start, f"sales={sales_count} clusters={len(sales_by_cluster)}")
               
         # Остатки товаров по складам
         stocks = WarehouseStock.objects.filter(store=ozon_store)
         stocks_by_cluster = {}
         total_stock_all_clusters = {}
         requested_stock_by_sku = {}  # Отдельный расчет товаров в заявках на поставку
-        logging.info(f"Остатки товаров по складам  {len(stocks)}")
-        
+        stocks_count = 0
         for stock in stocks:
+            stocks_count += 1
             cluster = stock.cluster_name or "Без кластера"
             stock_sum = (
                 stock.available_stock_count +
@@ -2254,13 +2282,18 @@ class Planer_View(APIView):
                 requested_stock_by_sku[stock.sku] = 0
             requested_stock_by_sku[stock.sku] += stock.requested_stock_count
             
+        logging.info(f"Остатки товаров по складам  {stocks_count}")
         # logging.info(f"Заявки на поставку по SKU 1928741963 {requested_stock_by_sku[1928741963]}")
+        stage_start = mark("stocks_sec", stage_start, f"stocks={stocks_count}")
         # FBS остатки
         fbs_stocks = FbsStock.objects.filter(store=ozon_store)
         fbs_by_sku = {}
+        fbs_count = 0
         for f in fbs_stocks:
+            fbs_count += 1
             fbs_by_sku.setdefault(f.sku, 0)
             fbs_by_sku[f.sku] += f.present
+        stage_start = mark("fbs_stocks_sec", stage_start, f"fbs_stocks={fbs_count}")
 
 
 
@@ -2278,6 +2311,8 @@ class Planer_View(APIView):
                 product_revenue_map[sku] += data["price"]
 
         total_revenue = sum(revenue_by_cluster.values()) or 1  # защита от деления на 0
+        stage_start = mark("revenue_sec", stage_start, f"total_revenue={round(total_revenue, 2)}")
+
 
         
         # Получаем данные по кластерам доставки average_delivery_time impact_share
@@ -2296,6 +2331,11 @@ class Planer_View(APIView):
             (a.cluster_name, a.sku): a
             for a in DeliveryClusterItemAnalytics.objects.filter(store=ozon_store)
         }
+        stage_start = mark(
+            "delivery_analytics_sec",
+            stage_start,
+            f"clusters={len(delivery_cluster_data)} items={len(item_analytics_map)}",
+        )
         
         # 2. Финальная сборка по кластерам
         all_clusters = set(sales_by_cluster) | set(stocks_by_cluster)
@@ -2475,6 +2515,11 @@ class Planer_View(APIView):
                     } for offer_id, qty in offer_delivery_totals.items()
                 ]
 
+        stage_start = mark(
+            "clusters_build_sec",
+            stage_start,
+            f"clusters={len(cluster_list)} offers={len(offer_delivery_totals)}",
+        )
         # Пересчет for_delivery для обязательных товаров после всех основных расчетов
         if mandatory_products:
             # Сначала собираем информацию о том, в каких кластерах есть обязательные товары
@@ -2554,9 +2599,12 @@ class Planer_View(APIView):
                 } for offer_id, qty in offer_delivery_totals.items()
             ]
 
+        stage_start = mark("mandatory_rebalance_sec", stage_start, f"mandatory={len(mandatory_products)}")
         # сортировка кластеров по выручке
         cluster_list.sort(key=lambda c: c["cluster_revenue"], reverse=True)
         summary.sort(key=lambda c: c["total_for_delivery"], reverse=True)
+        stage_start = mark("sorting_sec", stage_start, f"clusters={len(cluster_list)} summary={len(summary)}")
+
 
         # Сводная аналитика доставки
         try:
@@ -2565,9 +2613,11 @@ class Planer_View(APIView):
             average_time = None        
         execution_time = round(time.time() - start_time, 3)
         logging.info(f"[⏱] Время выполнения запроса: {execution_time}s")
+        logging.info("Planner timings store=%s %s", ozon_store.id, timings)
         resp = Response({
             "clusters": cluster_list,
             "summary": summary,
+            "timings": timings,
             "execution_time_seconds": execution_time,
             "average_delivery_time": average_time,
         })
