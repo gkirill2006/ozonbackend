@@ -2236,10 +2236,13 @@ class Planer_View(APIView):
 
         # Продажи
         logging.info(f"Дата до которой смотрим {since_date}")
-        sales_qs = Sale.objects.filter(
-            store=ozon_store,
-            date__gte=since_date,
-            sale_type__in=[Sale.FBO, Sale.FBS]
+        sales_qs = (
+            Sale.objects.filter(
+                store=ozon_store,
+                date__gte=since_date,
+                sale_type__in=[Sale.FBO, Sale.FBS]
+            )
+            .values_list("cluster_to", "sku", "quantity", "price")
         )
         query_start = time.perf_counter()
         sales = list(sales_qs)
@@ -2249,12 +2252,12 @@ class Planer_View(APIView):
         sales_by_cluster = {}
         sales_count = len(sales)
         agg_start = time.perf_counter()
-        for s in sales:
-            cluster = s.cluster_to or "Без кластера"
+        for cluster, sku, quantity, price in sales:
+            cluster = cluster or "Без кластера"
             sales_by_cluster.setdefault(cluster, {})
-            sales_by_cluster[cluster].setdefault(s.sku, {"qty": 0, "price": 0})
-            sales_by_cluster[cluster][s.sku]["qty"] += s.quantity
-            sales_by_cluster[cluster][s.sku]["price"] += float(s.price)*s.quantity
+            sales_by_cluster[cluster].setdefault(sku, {"qty": 0, "price": 0})
+            sales_by_cluster[cluster][sku]["qty"] += quantity
+            sales_by_cluster[cluster][sku]["price"] += float(price) * quantity
         sales_agg_sec = round(time.perf_counter() - agg_start, 4)
         timings["sales_agg_sec"] = sales_agg_sec
         logging.info("Planner sales_agg_sec=%s clusters=%s", sales_agg_sec, len(sales_by_cluster))
@@ -2277,7 +2280,24 @@ class Planer_View(APIView):
         stage_start = mark("sales_sec", stage_start, f"sales={sales_count} clusters={len(sales_by_cluster)}")
               
         # Остатки товаров по складам
-        stocks_qs = WarehouseStock.objects.filter(store=ozon_store)
+        stocks_qs = (
+            WarehouseStock.objects.filter(store=ozon_store)
+            .values_list(
+                "cluster_name",
+                "sku",
+                "available_stock_count",
+                "valid_stock_count",
+                "waiting_docs_stock_count",
+                "expiring_stock_count",
+                "transit_defect_stock_count",
+                "stock_defect_stock_count",
+                "excess_stock_count",
+                "other_stock_count",
+                "requested_stock_count",
+                "transit_stock_count",
+                "return_from_customer_stock_count",
+            )
+        )
         query_start = time.perf_counter()
         stocks = list(stocks_qs)
         stocks_query_sec = round(time.perf_counter() - query_start, 4)
@@ -2288,38 +2308,52 @@ class Planer_View(APIView):
         requested_stock_by_sku = {}  # Отдельный расчет товаров в заявках на поставку
         stocks_count = len(stocks)
         agg_start = time.perf_counter()
-        for stock in stocks:
-            cluster = stock.cluster_name or "Без кластера"
+        for (
+            cluster_name,
+            sku,
+            available_stock_count,
+            valid_stock_count,
+            waiting_docs_stock_count,
+            expiring_stock_count,
+            transit_defect_stock_count,
+            stock_defect_stock_count,
+            excess_stock_count,
+            other_stock_count,
+            requested_stock_count,
+            transit_stock_count,
+            return_from_customer_stock_count,
+        ) in stocks:
+            cluster = cluster_name or "Без кластера"
             stock_sum = (
-                stock.available_stock_count +
-                stock.valid_stock_count +
-                stock.waiting_docs_stock_count +
-                stock.expiring_stock_count +
-                stock.transit_defect_stock_count +
-                stock.stock_defect_stock_count +
-                stock.excess_stock_count +
-                stock.other_stock_count +
-                stock.requested_stock_count +
-                stock.transit_stock_count +
-                stock.return_from_customer_stock_count
+                available_stock_count +
+                valid_stock_count +
+                waiting_docs_stock_count +
+                expiring_stock_count +
+                transit_defect_stock_count +
+                stock_defect_stock_count +
+                excess_stock_count +
+                other_stock_count +
+                requested_stock_count +
+                transit_stock_count +
+                return_from_customer_stock_count
             )
             
             # По кластеру
             if cluster not in stocks_by_cluster:
                 stocks_by_cluster[cluster] = {}
-            if stock.sku not in stocks_by_cluster[cluster]:
-                stocks_by_cluster[cluster][stock.sku] = 0
-            stocks_by_cluster[cluster][stock.sku] += stock_sum
+            if sku not in stocks_by_cluster[cluster]:
+                stocks_by_cluster[cluster][sku] = 0
+            stocks_by_cluster[cluster][sku] += stock_sum
 
             # По всем кластерам
-            if stock.sku not in total_stock_all_clusters:
-                total_stock_all_clusters[stock.sku] = 0
-            total_stock_all_clusters[stock.sku] += stock_sum
+            if sku not in total_stock_all_clusters:
+                total_stock_all_clusters[sku] = 0
+            total_stock_all_clusters[sku] += stock_sum
             
             # Отдельный расчет товаров в заявках на поставку по SKU
-            if stock.sku not in requested_stock_by_sku:
-                requested_stock_by_sku[stock.sku] = 0
-            requested_stock_by_sku[stock.sku] += stock.requested_stock_count
+            if sku not in requested_stock_by_sku:
+                requested_stock_by_sku[sku] = 0
+            requested_stock_by_sku[sku] += requested_stock_count
         stocks_agg_sec = round(time.perf_counter() - agg_start, 4)
         timings["stocks_agg_sec"] = stocks_agg_sec
         logging.info("Planner stocks_agg_sec=%s clusters=%s", stocks_agg_sec, len(stocks_by_cluster))
@@ -2328,7 +2362,10 @@ class Planer_View(APIView):
         # logging.info(f"Заявки на поставку по SKU 1928741963 {requested_stock_by_sku[1928741963]}")
         stage_start = mark("stocks_sec", stage_start, f"stocks={stocks_count}")
         # FBS остатки
-        fbs_qs = FbsStock.objects.filter(store=ozon_store)
+        fbs_qs = (
+            FbsStock.objects.filter(store=ozon_store)
+            .values_list("sku", "present")
+        )
         query_start = time.perf_counter()
         fbs_stocks = list(fbs_qs)
         fbs_query_sec = round(time.perf_counter() - query_start, 4)
@@ -2337,9 +2374,9 @@ class Planer_View(APIView):
         fbs_by_sku = {}
         fbs_count = len(fbs_stocks)
         agg_start = time.perf_counter()
-        for f in fbs_stocks:
-            fbs_by_sku.setdefault(f.sku, 0)
-            fbs_by_sku[f.sku] += f.present
+        for sku, present in fbs_stocks:
+            fbs_by_sku.setdefault(sku, 0)
+            fbs_by_sku[sku] += present
         fbs_agg_sec = round(time.perf_counter() - agg_start, 4)
         timings["fbs_agg_sec"] = fbs_agg_sec
         logging.info("Planner fbs_agg_sec=%s fbs=%s", fbs_agg_sec, len(fbs_by_sku))

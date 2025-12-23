@@ -235,6 +235,7 @@ class Sale(models.Model):
     class Meta:
         indexes = [
             models.Index(fields=["store", "date"]),
+            models.Index(fields=["store", "date", "sale_type"]),
         ]
 
     def __str__(self):
