@@ -1434,10 +1434,16 @@ class ProductAnalytics_V2_View(APIView):
         logging.info(f"Total len clusters = {len(all_clusters)}")
         offer_delivery_totals = {}
         for cluster in all_clusters:
+            delivery_info = delivery_cluster_data.get(
+                cluster,
+                {"average_delivery_time": 0, "impact_share": 0},
+            )
             cluster_data = {
                 "cluster_name": cluster,
                 "cluster_revenue": round(revenue_by_cluster.get(cluster, 0), 2),
                 "cluster_share_percent": round((revenue_by_cluster.get(cluster, 0) / total_revenue) * 100, 4),
+                "average_delivery_time": delivery_info["average_delivery_time"],
+                "impact_share": delivery_info["impact_share"],
                 "products": []
             }
             all_skus = set()
@@ -1460,8 +1466,6 @@ class ProductAnalytics_V2_View(APIView):
                 # 1. N - Ср. время доставки до покупателя - туда вставить данные общие из параметра
                 # average_delivery_time (там 2 разных приходит, надо с вами потестить)
                 # 2. O - Доля влияния, %, туда вставить параметр impact_share
-                delivery_info = delivery_cluster_data.get(cluster, {"average_delivery_time": 0, "impact_share": 0})
-
                 # ЧАСТНАЯ АНАЛИТИКА ПО КЛАСТЕРУ (/v1/analytics/average-delivery-time/details) - это
                 # значит, что получаем цифры по каждому товару уникальные
                 # 1. P - Ср. время доставки до покупателя ТОВАР, ч - average_delivery_time (тоже там два
@@ -2465,10 +2469,16 @@ class Planer_View(APIView):
         logging.info(f"Total len clusters = {len(all_clusters)}")
         offer_delivery_totals = {}
         for cluster in all_clusters:
+            delivery_info = delivery_cluster_data.get(
+                cluster,
+                {"average_delivery_time": 0, "impact_share": 0},
+            )
             cluster_data = {
                 "cluster_name": cluster,
                 "cluster_revenue": round(revenue_by_cluster.get(cluster, 0), 2),
                 "cluster_share_percent": round((revenue_by_cluster.get(cluster, 0) / total_revenue) * 100, 4),
+                "average_delivery_time": delivery_info["average_delivery_time"],
+                "impact_share": delivery_info["impact_share"],
                 "products": []
             }
             all_skus = set()
@@ -2491,8 +2501,6 @@ class Planer_View(APIView):
                 # 1. N - Ср. время доставки до покупателя - туда вставить данные общие из параметра
                 # average_delivery_time (там 2 разных приходит, надо с вами потестить)
                 # 2. O - Доля влияния, %, туда вставить параметр impact_share
-                delivery_info = delivery_cluster_data.get(cluster, {"average_delivery_time": 0, "impact_share": 0})
-
                 # ЧАСТНАЯ АНАЛИТИКА ПО КЛАСТЕРУ (/v1/analytics/average-delivery-time/details) - это
                 # значит, что получаем цифры по каждому товару уникальные
                 # 1. P - Ср. время доставки до покупателя ТОВАР, ч - average_delivery_time (тоже там два
@@ -2765,11 +2773,8 @@ class PlanerPivotView(Planer_View):
 
         for cluster in clusters:
             cluster_name = cluster.get("cluster_name")
-            raw_share = cluster.get("cluster_share_percent")
-            try:
-                impact_share = round(float(raw_share), 4)
-            except (TypeError, ValueError):
-                impact_share = raw_share
+            raw_share = cluster.get("impact_share")
+            impact_share = self._round_share(raw_share) if raw_share is not None else 0
             for p in cluster.get("products", []):
                 fbs_qty = p.get("fbs_stock_total_qty") or 0
                 if fbs_qty > 0 and p.get("offer_id"):
