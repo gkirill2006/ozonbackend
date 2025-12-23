@@ -1201,6 +1201,7 @@ class ProductAnalytics_V2_View(APIView):
         # logging.info(f" Target SKU ={products_by_sku.get(2909660721)}")
         # Создаем словарь для получения barcode по offer_id
         offer_id_to_barcode = {p.offer_id: p.barcodes[0] if p.barcodes else None for p in products}
+        stage_start = mark("products_sec", stage_start)
         
         
 
@@ -1226,6 +1227,7 @@ class ProductAnalytics_V2_View(APIView):
                 product_revenue_map_qty[sku] += data["qty"]
                 
         logging.info(f"Количество уникальных SKU product_revenue_map_qty =  {len(product_revenue_map_qty)}")  
+        stage_start = mark("sales_sec", stage_start)
               
         # Остатки товаров по складам
         stocks = WarehouseStock.objects.filter(store=ozon_store)
@@ -1268,12 +1270,14 @@ class ProductAnalytics_V2_View(APIView):
             requested_stock_by_sku[stock.sku] += stock.requested_stock_count
             
         # logging.info(f"Заявки на поставку по SKU 1928741963 {requested_stock_by_sku[1928741963]}")
+        stage_start = mark("stocks_sec", stage_start)
         # FBS остатки
         fbs_stocks = FbsStock.objects.filter(store=ozon_store)
         fbs_by_sku = {}
         for f in fbs_stocks:
             fbs_by_sku.setdefault(f.sku, 0)
             fbs_by_sku[f.sku] += f.present
+        stage_start = mark("fbs_stocks_sec", stage_start)
 
 
 
@@ -1291,6 +1295,7 @@ class ProductAnalytics_V2_View(APIView):
                 product_revenue_map[sku] += data["price"]
 
         total_revenue = sum(revenue_by_cluster.values()) or 1  # защита от деления на 0
+        stage_start = mark("revenue_sec", stage_start)
 
         
         # Получаем данные по кластерам доставки average_delivery_time impact_share
@@ -1309,6 +1314,7 @@ class ProductAnalytics_V2_View(APIView):
             (a.cluster_name, a.sku): a
             for a in DeliveryClusterItemAnalytics.objects.filter(store=ozon_store)
         }
+        stage_start = mark("delivery_analytics_sec", stage_start)
         
         # 2. Финальная сборка по кластерам
         all_clusters = set(sales_by_cluster) | set(stocks_by_cluster)
@@ -1488,6 +1494,7 @@ class ProductAnalytics_V2_View(APIView):
                     } for offer_id, qty in offer_delivery_totals.items()
                 ]
 
+        stage_start = mark("clusters_build_sec", stage_start)
         # Пересчет for_delivery для обязательных товаров после всех основных расчетов
         if mandatory_products:
             # Сначала собираем информацию о том, в каких кластерах есть обязательные товары
@@ -1567,9 +1574,11 @@ class ProductAnalytics_V2_View(APIView):
                 } for offer_id, qty in offer_delivery_totals.items()
             ]
 
+        stage_start = mark("mandatory_rebalance_sec", stage_start)
         # сортировка кластеров по выручке
         cluster_list.sort(key=lambda c: c["cluster_revenue"], reverse=True)
         summary.sort(key=lambda c: c["total_for_delivery"], reverse=True)
+        stage_start = mark("sorting_sec", stage_start)
 
         # Сводная аналитика доставки
         try:
@@ -1581,6 +1590,7 @@ class ProductAnalytics_V2_View(APIView):
         resp = Response({
             "clusters": cluster_list,
             "summary": summary,
+            "timings": timings,
             "execution_time_seconds": execution_time,
             "average_delivery_time": average_time,
         })
@@ -2030,6 +2040,13 @@ class Planer_View(APIView):
 
     def post(self, request):
         start_time = time.time()
+        timings = {}
+        stage_start = time.perf_counter()
+
+        def mark(stage_name, started_at):
+            timings[stage_name] = round(time.perf_counter() - started_at, 4)
+            return time.perf_counter()
+
         store_id = request.data.get("store_id") or request.query_params.get("store_id")
         if not store_id:
             return Response({"error": "store_id is required"}, status=status.HTTP_400_BAD_REQUEST)
@@ -2054,6 +2071,7 @@ class Planer_View(APIView):
         f10 = filters["f10"]
         exclude_offer_ids = filters["exclude_offer_ids"]
         mandatory_products = filters["mandatory_products"]
+        stage_start = mark("filters_sec", stage_start)
 
         logging.info(
             "Planner request store=%s days=%s sort_by=%s period=%s price_range=(%s,%s) "
@@ -2210,7 +2228,7 @@ class Planer_View(APIView):
             cluster_data = {
                 "cluster_name": cluster,
                 "cluster_revenue": round(revenue_by_cluster.get(cluster, 0), 2),
-                "cluster_share_percent": round((revenue_by_cluster.get(cluster, 0) / total_revenue) * 100, 2),
+                "cluster_share_percent": round((revenue_by_cluster.get(cluster, 0) / total_revenue) * 100, 4),
                 "products": []
             }
             all_skus = set()
