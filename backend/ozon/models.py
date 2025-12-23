@@ -34,6 +34,12 @@ class Product(models.Model):
     
     # Фото
     primary_image = models.URLField(blank=True, null=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["store", "price"]),
+        ]
+
     def __str__(self):
         return f"{self.offer_id} ({self.name})"
 
@@ -225,6 +231,11 @@ class Sale(models.Model):
     # Дополнительные поля
 
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["store", "date"]),
+        ]
 
     def __str__(self):
         return f"{self.sale_type} / SKU {self.sku} / {self.quantity} шт. / {self.date.date()}"
