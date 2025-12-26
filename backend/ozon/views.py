@@ -43,6 +43,7 @@ from .serializers import (
     SupplyBatchConfirmedSerializer,
     FbsPostingSyncSerializer,
     FbsPostingSerializer,
+    FbsPostingLiteSerializer,
     FbsPostingPrintSerializer,
     BotSettingsSerializer,
     FbsPostingRefreshSerializer,
@@ -3264,18 +3265,39 @@ class FbsPostingListView(generics.ListAPIView):
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = FbsPostingSerializer
 
+    def _is_lite(self):
+        return self.request.query_params.get("lite") in ("1", "true", "True")
+
+    def get_serializer_class(self):
+        if self._is_lite():
+            return FbsPostingLiteSerializer
+        return FbsPostingSerializer
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        if not self._is_lite():
+            label_type = getattr(self, "_label_type", None) or self.request.query_params.get(
+                "label_type"
+            ) or OzonFbsPostingLabel.TASK_TYPE_BIG
+            context["label_type"] = label_type
+        return context
+
     def get_queryset(self):
         store_id = self.request.query_params.get("store_id")
         if not store_id:
             return OzonFbsPosting.objects.none()
 
         store = get_object_or_404(user_store_queryset(self.request.user), id=store_id)
-        label_type = self.request.query_params.get("label_type") or OzonFbsPostingLabel.TASK_TYPE_BIG
-        self._label_type = label_type
-        labels_qs = OzonFbsPostingLabel.objects.filter(task_type=label_type).order_by("-updated_at")
-        qs = OzonFbsPosting.objects.filter(store=store).prefetch_related(
-            Prefetch("labels", queryset=labels_qs, to_attr="prefetched_labels")
-        )
+        qs = OzonFbsPosting.objects.filter(store=store)
+        if self._is_lite():
+            qs = qs.defer("raw_payload", "available_actions", "cancellation")
+        else:
+            label_type = self.request.query_params.get("label_type") or OzonFbsPostingLabel.TASK_TYPE_BIG
+            self._label_type = label_type
+            labels_qs = OzonFbsPostingLabel.objects.filter(task_type=label_type).order_by("-updated_at")
+            qs = qs.prefetch_related(
+                Prefetch("labels", queryset=labels_qs, to_attr="prefetched_labels")
+            )
         status_param = self.request.query_params.get("status")
         if status_param:
             statuses = [s.strip() for s in status_param.split(",") if s.strip()]
@@ -3325,15 +3347,8 @@ class FbsPostingListView(generics.ListAPIView):
         start_ts = time.perf_counter()
         queryset = self.filter_queryset(self.get_queryset())
         qs_sec = time.perf_counter() - start_ts
-        label_type = getattr(self, "_label_type", None) or request.query_params.get(
-            "label_type"
-        ) or OzonFbsPostingLabel.TASK_TYPE_BIG
         serialize_start = time.perf_counter()
-        serializer = self.get_serializer(
-            queryset,
-            many=True,
-            context={"label_type": label_type},
-        )
+        serializer = self.get_serializer(queryset, many=True)
         postings_data = serializer.data
         serialize_sec = time.perf_counter() - serialize_start
 

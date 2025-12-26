@@ -207,6 +207,47 @@ class FbsPostingSerializer(serializers.ModelSerializer):
         return label.file_path if label else ""
 
 
+class FbsPostingLiteSerializer(serializers.ModelSerializer):
+    products = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OzonFbsPosting
+        fields = [
+            "id",
+            "posting_number",
+            "order_id",
+            "order_number",
+            "status",
+            "delivery_method_name",
+            "delivery_method_warehouse",
+            "tracking_number",
+            "in_process_at",
+            "shipment_date",
+            "delivering_date",
+            "status_changed_at",
+            "delivering_at",
+            "labels_printed_at",
+            "print_count",
+            "products",
+            "last_seen_at",
+            "last_synced_at",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_products(self, obj):
+        items = obj.products or []
+        if not isinstance(items, list):
+            return []
+        allowed_keys = {"sku", "imei", "name", "price", "offer_id", "quantity"}
+        result = []
+        for item in items:
+            if isinstance(item, dict):
+                filtered = {key: item.get(key) for key in allowed_keys if key in item}
+                result.append(filtered)
+        return result
+
+
 class FbsPostingPrintSerializer(serializers.Serializer):
     store_id = serializers.IntegerField()
     posting_numbers = serializers.ListField(
