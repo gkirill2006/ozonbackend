@@ -397,26 +397,19 @@ def _resolve_label_font_path():
 # FBS: добавляет подпись количества товаров в PDF этикетки.
 def _annotate_label_pdf(input_pdf, output_pdf, posting_number, quantity, font_path, extra_width=25):    
     doc = fitz.open(input_pdf)
-    font = None
-    if font_path:
-        try:
-            font = fitz.Font(fontfile=font_path)
-        except Exception as exc:
-            logging.warning("FBS label font load failed: %s", exc)
-            font = None
     found = False
     for page in doc:
         if posting_number in (page.get_text() or ""):
             found = True
-            _append_quantity_label(page, quantity, font, extra_width)
+            _append_quantity_label(page, quantity, font_path, extra_width)
     if not found and doc.page_count:
         page = doc[0]
-        _append_quantity_label(page, quantity, font, extra_width)
+        _append_quantity_label(page, quantity, font_path, extra_width)
     doc.save(output_pdf)
     doc.close()
 
 # FBS: добавляет подпись на этикетки.
-def _append_quantity_label(page, quantity, font, extra_width):
+def _append_quantity_label(page, quantity, font_path, extra_width):
     
     rect = page.rect
     new_rect = fitz.Rect(0, 0, rect.width + extra_width, rect.height)
@@ -436,15 +429,17 @@ def _append_quantity_label(page, quantity, font, extra_width):
         y1=new_rect.y1,
     )
 
-    if font:
-        page.insert_font(fontname="F0", fontbuffer=font.buffer)
-        fontname = "F0"
-        label_text = f"Кол-во товара: {quantity} шт."
-    else:
-        fontname = "helv"
-        label_text = f"Qty: {quantity}"
+    fontname = "helv"
+    label_text = f"Qty: {quantity}"
+    if font_path:
+        try:
+            page.insert_font(fontname="F0", fontfile=font_path)
+            fontname = "F0"
+            label_text = f"Кол-во товара: {quantity} шт."
+        except Exception as exc:
+            logging.warning("FBS label font load failed: %s", exc)
 
-    page.insert_textbox(
+    inserted = page.insert_textbox(
         rect=text_rect,
         buffer=label_text,
         fontname=fontname,
@@ -452,6 +447,26 @@ def _append_quantity_label(page, quantity, font, extra_width):
         rotate=270,
         align=1,
     )
+    if inserted <= 0:
+        inserted = page.insert_textbox(
+            rect=text_rect,
+            buffer=f"Кол-во: {quantity}",
+            fontname=fontname,
+            fontsize=12,
+            rotate=270,
+            align=1,
+        )
+    if inserted <= 0 and fontname != "helv":
+        inserted = page.insert_textbox(
+            rect=text_rect,
+            buffer=f"Qty: {quantity}",
+            fontname="helv",
+            fontsize=12,
+            rotate=270,
+            align=1,
+        )
+    if inserted <= 0:
+        logging.warning("FBS label text not inserted for qty=%s", quantity)
 # Наполянем модель товароми
 class SyncOzonProductView(APIView):
     def post(self, request):
@@ -3776,18 +3791,19 @@ class FbsPostingLabelsView(APIView):
                 quantity_total = sum((p.get("quantity") or 0) for p in posting.products)
             annotated_name = f"{posting_number}_{label_type}_qty.pdf"
             annotated_path = os.path.join(annotated_dir, annotated_name)
-            if not os.path.exists(annotated_path):
-                try:
-                    _annotate_label_pdf(
-                        input_pdf=file_path,
-                        output_pdf=annotated_path,
-                        posting_number=posting_number,
-                        quantity=quantity_total,
-                        font_path=font_path,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    logging.error("Label annotate error for %s: %s", posting_number, exc)
-                    annotated_path = file_path
+            try:
+                if os.path.exists(annotated_path):
+                    os.remove(annotated_path)
+                _annotate_label_pdf(
+                    input_pdf=file_path,
+                    output_pdf=annotated_path,
+                    posting_number=posting_number,
+                    quantity=quantity_total,
+                    font_path=font_path,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logging.error("Label annotate error for %s: %s", posting_number, exc)
+                annotated_path = file_path
             annotated_files[posting_number] = annotated_path
 
         ordered_files = [annotated_files[num] for num in posting_numbers if num in annotated_files]
