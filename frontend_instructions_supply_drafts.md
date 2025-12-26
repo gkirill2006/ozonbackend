@@ -343,6 +343,7 @@ Authorization: Bearer <JWT>
 **Что делает**
 - Синхронизирует OZON по статусам `awaiting_packaging` и `awaiting_deliver`.
 - Возвращает список по выбранному статусу (по умолчанию `awaiting_packaging`) и сразу counts.
+- В фоне обновляет `delivering`, `delivered`, `cancelled`.
 
 **body**
 ```json
@@ -374,6 +375,10 @@ Authorization: Bearer <JWT>
   "sync": {
     "awaiting_packaging": { "synced": 120, "created": 15, "updated": 105 },
     "awaiting_deliver": { "synced": 240, "created": 10, "updated": 230 }
+  },
+  "background_sync": {
+    "started": true,
+    "statuses": ["delivering", "delivered", "cancelled"]
   },
   "postings": [ ... ]
 }

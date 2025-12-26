@@ -5,6 +5,7 @@ from django.shortcuts import get_object_or_404
 from django.http import HttpResponse, FileResponse
 from django.conf import settings
 from django.core.cache import cache
+from django.db import close_old_connections
 from users.models import User, OzonStore, StoreFilterSettings, StoreAccess
 from .models import (
     Product,
@@ -55,6 +56,7 @@ from django.utils.dateparse import parse_datetime
 from collections import defaultdict
 import csv
 import os
+import threading
 
 from PyPDF2 import PdfReader, PdfWriter
 import fitz
@@ -95,6 +97,7 @@ POSTING_STATUSES = {
 
 
 def _parse_iso_datetime(value):
+    # FBS: парсит ISO-дату и приводит к timezone-aware.
     if not value:
         return None
     dt = parse_datetime(value)
@@ -104,6 +107,7 @@ def _parse_iso_datetime(value):
 
 
 def _normalize_posting_status(raw_status):
+    # FBS: нормализует статус отправления из OZON.
     return raw_status if raw_status in POSTING_STATUSES else OzonFbsPosting.STATUS_UNKNOWN
 
 
@@ -120,10 +124,12 @@ AUTO_SYNC_MIN_SECONDS = 30
 
 
 def _sync_cache_key(store_id, status):
+    # FBS: ключ кеша для последней синхронизации статуса.
     return f"fbs_sync:{store_id}:{status}"
 
 
 def _get_last_sync_time(store_id, status):
+    # FBS: получить время последней синхронизации статуса.
     key = _sync_cache_key(store_id, status)
     ts = cache.get(key)
     if not ts:
@@ -132,18 +138,36 @@ def _get_last_sync_time(store_id, status):
 
 
 def _set_last_sync_time(store_id, status, sync_time):
+    # FBS: сохранить время последней синхронизации статуса.
     key = _sync_cache_key(store_id, status)
     cache.set(key, sync_time.timestamp(), timeout=3600)
 
 
 def _should_sync(store_id, status):
+    # FBS: решает, можно ли запускать синк по таймауту.
     last = _get_last_sync_time(store_id, status)
     if not last:
         return True
     return (timezone.now() - last).total_seconds() >= AUTO_SYNC_MIN_SECONDS
 
 
+def _sync_bg_lock_key(store_id):
+    # FBS: ключ блокировки фонового синка.
+    return f"fbs_sync_bg:{store_id}"
+
+
+def _acquire_bg_sync_lock(store_id):
+    # FBS: пробует взять блокировку фонового синка.
+    return cache.add(_sync_bg_lock_key(store_id), True, timeout=60)
+
+
+def _release_bg_sync_lock(store_id):
+    # FBS: освобождает блокировку фонового синка.
+    cache.delete(_sync_bg_lock_key(store_id))
+
+
 def _resolve_sync_window(since, to):
+    # FBS: вычисляет окно синка (по умолчанию 3 месяца).
     if since is None and to is None:
         to = timezone.now()
         since = to - timedelta(days=90)
@@ -155,6 +179,7 @@ def _resolve_sync_window(since, to):
 
 
 def _sync_fbs_postings_for_status(store, status_value, since, to, limit, sync_time=None):
+    # FBS: синхронизирует постинги по статусу из OZON в БД.
     sync_time = sync_time or timezone.now()
     try:
         postings = fetch_fbs_postings(
@@ -280,7 +305,7 @@ def _sync_fbs_postings_for_status(store, status_value, since, to, limit, sync_ti
         "posting_numbers": posting_numbers,
     }
 
-
+# FBS: считает количества постингов по статусам.
 def _get_posting_counts(store, include_archived=True):
     qs = OzonFbsPosting.objects.filter(store=store)
     if not include_archived:
@@ -290,21 +315,52 @@ def _get_posting_counts(store, include_archived=True):
     response_counts["unknown"] = counts.get(OzonFbsPosting.STATUS_UNKNOWN, 0)
     return response_counts, sum(counts.values())
 
+# FBS: фоновой синк delivering/delivered/cancelled.
+def _background_sync_statuses(store_id, statuses, since_str, to_str, limit):
+    close_old_connections()
+    try:
+        store = OzonStore.objects.get(id=store_id)
+    except OzonStore.DoesNotExist:
+        _release_bg_sync_lock(store_id)
+        return
 
-def _ensure_label_dir(store_id):
+    try:
+        for status_value in statuses:
+            if not _should_sync(store_id, status_value):
+                continue
+            try:
+                result = _sync_fbs_postings_for_status(
+                    store,
+                    status_value,
+                    since_str,
+                    to_str,
+                    limit,
+                )
+                _set_last_sync_time(store_id, status_value, result["sync_time"])
+            except OzonApiError as exc:
+                if exc.status_code in (401, 403):
+                    store.api_key_invalid_at = timezone.now()
+                    store.save(update_fields=["api_key_invalid_at"])
+                logging.error("Background sync error for %s: %s", status_value, exc)
+    finally:
+        _release_bg_sync_lock(store_id)
+        close_old_connections()
+
+# FBS: создает директорию для файлов этикеток.
+def _ensure_label_dir(store_id):    
     labels_dir = os.path.join(settings.MEDIA_ROOT, "ozon", "labels", str(store_id))
     os.makedirs(labels_dir, exist_ok=True)
     return labels_dir
 
-
-def _download_label_file(file_url, target_path):
+# FBS: скачивает PDF этикетки по URL.
+def _download_label_file(file_url, target_path):    
     resp = requests.get(file_url, timeout=60)
     resp.raise_for_status()
     with open(target_path, "wb") as output:
         output.write(resp.content)
 
-
-def _fetch_label_task_status(store, task_id):
+# FBS: проверяет статус задачи этикетки в OZON.
+def _fetch_label_task_status(store, task_id):    
     url = "https://api-seller.ozon.ru/v1/posting/fbs/package-label/get"
     headers = {
         "Client-Id": store.client_id,
@@ -314,8 +370,8 @@ def _fetch_label_task_status(store, task_id):
     resp = requests.post(url, headers=headers, json={"task_id": task_id})
     return resp
 
-
-def _resolve_label_font_path():
+# FBS: ищет шрифт для подписи на этикетке.
+def _resolve_label_font_path():    
     candidates = [
         os.path.join(settings.BASE_DIR.parent, "posting_bot", "code", "app", "Inter.ttf"),
         os.path.join(settings.BASE_DIR, "Inter.ttf"),
@@ -325,8 +381,8 @@ def _resolve_label_font_path():
             return path
     return None
 
-
-def _annotate_label_pdf(input_pdf, output_pdf, posting_number, quantity, font_path, extra_width=25):
+# FBS: добавляет подпись количества товаров в PDF этикетки.
+def _annotate_label_pdf(input_pdf, output_pdf, posting_number, quantity, font_path, extra_width=25):    
     doc = fitz.open(input_pdf)
     font = fitz.Font(fontfile=font_path) if font_path else None
     found = False
@@ -340,8 +396,9 @@ def _annotate_label_pdf(input_pdf, output_pdf, posting_number, quantity, font_pa
     doc.save(output_pdf)
     doc.close()
 
-
+# FBS: добавляет подпись на этикетки.
 def _append_quantity_label(page, quantity, font, extra_width):
+    
     rect = page.rect
     new_rect = fitz.Rect(0, 0, rect.width + extra_width, rect.height)
     page.set_mediabox(new_rect)
@@ -3146,6 +3203,7 @@ class PlanerPivotView(Planer_View):
         return resp
 
 
+# FBS: синк постингов из OZON по статусу.
 class FbsPostingSyncView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -3197,6 +3255,7 @@ class FbsPostingSyncView(APIView):
         return Response(response_payload, status=status.HTTP_200_OK)
 
 
+# FBS: список постингов из БД (с авто-синком для ключевых статусов).
 class FbsPostingListView(generics.ListAPIView):
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = FbsPostingSerializer
@@ -3283,6 +3342,7 @@ class FbsPostingListView(generics.ListAPIView):
         )
 
 
+# FBS: счетчики по статусам для табов.
 class FbsPostingCountsView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -3306,6 +3366,7 @@ class FbsPostingCountsView(APIView):
         )
 
 
+# FBS: быстрый refresh (awaiting_packaging/awaiting_deliver) + фоновой синк остальных.
 class FbsPostingRefreshView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -3347,6 +3408,20 @@ class FbsPostingRefreshView(APIView):
                 )
             return Response({"error": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
 
+        background_started = False
+        if _acquire_bg_sync_lock(store.id):
+            background_started = True
+            bg_statuses = [
+                OzonFbsPosting.STATUS_DELIVERING,
+                OzonFbsPosting.STATUS_DELIVERED,
+                OzonFbsPosting.STATUS_CANCELLED,
+            ]
+            threading.Thread(
+                target=_background_sync_statuses,
+                args=(store.id, bg_statuses, since_str, to_str, limit),
+                daemon=True,
+            ).start()
+
         response_counts, total = _get_posting_counts(store, include_archived=True)
         postings_qs = (
             OzonFbsPosting.objects
@@ -3369,12 +3444,21 @@ class FbsPostingRefreshView(APIView):
                 "counts": response_counts,
                 "total": total,
                 "sync": sync_results,
+                "background_sync": {
+                    "started": background_started,
+                    "statuses": [
+                        OzonFbsPosting.STATUS_DELIVERING,
+                        OzonFbsPosting.STATUS_DELIVERED,
+                        OzonFbsPosting.STATUS_CANCELLED,
+                    ],
+                },
                 "postings": postings,
             },
             status=status.HTTP_200_OK,
         )
 
 
+# FBS: фиксация факта печати (защита от дублей).
 class FbsPostingPrintView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -3437,6 +3521,7 @@ class FbsPostingPrintView(APIView):
         )
 
 
+# FBS: генерация этикеток и возврат склеенного PDF.
 class FbsPostingLabelsView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -3665,6 +3750,7 @@ class FbsPostingLabelsView(APIView):
         return response
 
 
+# FBS: экспорт статусов в CSV.
 class FbsPostingExportView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -3703,6 +3789,7 @@ class FbsPostingExportView(APIView):
         return response
 
 
+# FBS: настройки бота (сортировка PDF).
 class BotSettingsView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -3740,6 +3827,7 @@ class BotSettingsView(APIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
+# FBS: сводка по статусам для бота/дашборда.
 class FbsPostingSummaryView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
