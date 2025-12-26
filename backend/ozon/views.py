@@ -804,6 +804,25 @@ class CreateSupplyDraftView(APIView):
         data = serializer.validated_data
         store_id = data["store_id"]
         store = get_object_or_404(user_store_queryset(request.user), id=store_id)
+        filter_settings, _ = StoreFilterSettings.objects.get_or_create(store=store)
+        excluded_offer_ids = {
+            str(item).strip().lower()
+            for item in filter_settings.excluded_products.values_list("article", flat=True)
+            if item
+        }
+        sku_to_offer = {}
+        if excluded_offer_ids:
+            all_skus = {
+                item["sku"]
+                for shipment in data["shipments"]
+                for item in shipment.get("items", [])
+                if "sku" in item
+            }
+            if all_skus:
+                sku_to_offer = dict(
+                    Product.objects.filter(store=store, sku__in=all_skus)
+                    .values_list("sku", "offer_id")
+                )
 
         destination = data["destinationWarehouse"]
         supply_type = data["supplyType"]
@@ -818,6 +837,7 @@ class CreateSupplyDraftView(APIView):
             drop_off_point_name=destination.get("name", ""),
             status="queued",
         )
+        excluded_count = 0
 
         for shipment in data["shipments"]:
             cluster_name = shipment["warehouse"]
@@ -828,11 +848,15 @@ class CreateSupplyDraftView(APIView):
             if not cluster:
                 continue
 
-            items = [
-                {"sku": item["sku"], "quantity": item["quantity"]}
-                for item in shipment["items"]
-                if item["quantity"] > 0
-            ]
+            items = []
+            for item in shipment["items"]:
+                if item["quantity"] <= 0:
+                    continue
+                offer_id = sku_to_offer.get(item["sku"])
+                if offer_id and str(offer_id).strip().lower() in excluded_offer_ids:
+                    excluded_count += 1
+                    continue
+                items.append({"sku": item["sku"], "quantity": item["quantity"]})
             if not items:
                 continue
 
@@ -854,6 +878,8 @@ class CreateSupplyDraftView(APIView):
                 request_payload=payload,
                 status="queued",
             )
+        if excluded_count:
+            logging.info("Supply drafts: excluded %s items by planner exclusions (store=%s)", excluded_count, store.id)
 
         try:
             from .tasks import process_supply_batch
