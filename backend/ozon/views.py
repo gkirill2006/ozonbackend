@@ -434,7 +434,14 @@ def _append_quantity_label(page, quantity, font_path, extra_width):
     label_text = f"Qty: {quantity}"
     if font_path:
         try:
-            page.insert_font(fontname="F0", fontfile=font_path)
+            encoding = getattr(fitz, "TEXT_ENCODING_UNICODE", None)
+            try:
+                if encoding is None:
+                    page.insert_font(fontname="F0", fontfile=font_path)
+                else:
+                    page.insert_font(fontname="F0", fontfile=font_path, encoding=encoding)
+            except TypeError:
+                page.insert_font(fontname="F0", fontfile=font_path)
             fontname = "F0"
             label_text = f"Кол-во товара: {quantity} шт."
         except Exception as exc:
