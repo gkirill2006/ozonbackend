@@ -14,4 +14,5 @@ gspread
 gspread-formatting
 google-auth
 drf-yasg
-
+PyPDF2>=3.0.0
+PyMuPDF>=1.24.0

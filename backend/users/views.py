@@ -236,6 +236,14 @@ class UserStoreDetailView(generics.RetrieveUpdateDestroyAPIView):
             return Response({"error": "Только владелец магазина может изменять его настройки"}, status=status.HTTP_403_FORBIDDEN)
         return super().update(request, *args, **kwargs)
 
+    def perform_update(self, serializer):
+        instance = self.get_object()
+        old_api_key = instance.api_key
+        obj = serializer.save()
+        if old_api_key != obj.api_key and obj.api_key_invalid_at:
+            obj.api_key_invalid_at = None
+            obj.save(update_fields=["api_key_invalid_at"])
+
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
         if instance.user != request.user:

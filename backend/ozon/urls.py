@@ -27,6 +27,15 @@ from .views import (
     SupplyDraftCreateSupplyView,
     SupplyDraftSupplyStatusView,
     SupplyDraftMoveToNewBatchView,
+    FbsPostingSyncView,
+    FbsPostingListView,
+    FbsPostingCountsView,
+    FbsPostingRefreshView,
+    FbsPostingPrintView,
+    FbsPostingLabelsView,
+    FbsPostingExportView,
+    BotSettingsView,
+    FbsPostingSummaryView,
 )
 urlpatterns = [
     path('ozon/products/', SyncOzonProductView.as_view()),
@@ -57,5 +66,14 @@ urlpatterns = [
     path("ozon/drafts/batch/<uuid:batch_id>/confirm-supply/", SupplyDraftCreateSupplyView.as_view(), name="ozon-draft-confirm-supply"),
     path("ozon/drafts/batch/<uuid:batch_id>/supply-info/", SupplyDraftSupplyStatusView.as_view(), name="ozon-draft-supply-info"),
     path("ozon/drafts/batch/<uuid:batch_id>/move-draft/", SupplyDraftMoveToNewBatchView.as_view(), name="ozon-draft-move"),
+    path("ozon/postings/sync/", FbsPostingSyncView.as_view(), name="ozon-postings-sync"),
+    path("ozon/postings/", FbsPostingListView.as_view(), name="ozon-postings-list"),
+    path("ozon/postings/counts/", FbsPostingCountsView.as_view(), name="ozon-postings-counts"),
+    path("ozon/postings/refresh/", FbsPostingRefreshView.as_view(), name="ozon-postings-refresh"),
+    path("ozon/postings/print/", FbsPostingPrintView.as_view(), name="ozon-postings-print"),
+    path("ozon/postings/labels/", FbsPostingLabelsView.as_view(), name="ozon-postings-labels"),
+    path("ozon/postings/export/", FbsPostingExportView.as_view(), name="ozon-postings-export"),
+    path("ozon/postings/summary/", FbsPostingSummaryView.as_view(), name="ozon-postings-summary"),
+    path("ozon/bot/settings/", BotSettingsView.as_view(), name="ozon-bot-settings"),
 
 ]

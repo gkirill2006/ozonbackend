@@ -94,3 +94,6 @@ ozon-469708-c5f1eca77c02.json
 # backend/users/migrations/*
 # !backend/users/migrations/__init__.py
 backend/backup_161225.sql
+backend/media/ozon/labels/2/merged/*
+backend/media/ozon/labels/2/annotated/*
+posting_bot/

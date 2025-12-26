@@ -21,6 +21,11 @@ from .models import (
     CampaignPerformanceReport,
     CampaignPerformanceReportEntry,
     StoreAdControl,
+    OzonFbsPosting,
+    OzonFbsPostingStatusHistory,
+    OzonFbsPostingPrintLog,
+    OzonFbsPostingLabel,
+    OzonBotSettings,
 )
 
 @admin.register(Product)
@@ -332,6 +337,54 @@ class ManualCampaignAdmin(admin.ModelAdmin):
     search_fields = ('name', 'ozon_campaign_id', 'sku', 'offer_id', 'store__name', 'sku_list')
     ordering = ('-created_at',)
     readonly_fields = ('created_at', 'updated_at')
+
+    @admin.display(description="Статус (Ozon)")
+    def state_raw(self, obj):
+        return obj.state
+
+
+@admin.register(OzonFbsPosting)
+class OzonFbsPostingAdmin(admin.ModelAdmin):
+    list_display = (
+        "posting_number",
+        "store",
+        "status",
+        "needs_label",
+        "print_count",
+        "status_changed_at",
+        "updated_at",
+    )
+    list_filter = ("status", "store", "needs_label")
+    search_fields = ("posting_number", "order_number")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(OzonFbsPostingStatusHistory)
+class OzonFbsPostingStatusHistoryAdmin(admin.ModelAdmin):
+    list_display = ("posting", "status", "changed_at", "source", "created_at")
+    list_filter = ("status", "source")
+    search_fields = ("posting__posting_number",)
+    readonly_fields = ("created_at",)
+
+
+@admin.register(OzonFbsPostingPrintLog)
+class OzonFbsPostingPrintLogAdmin(admin.ModelAdmin):
+    list_display = ("posting", "user", "forced", "printed_at")
+    list_filter = ("forced",)
+    search_fields = ("posting__posting_number",)
+
+
+@admin.register(OzonFbsPostingLabel)
+class OzonFbsPostingLabelAdmin(admin.ModelAdmin):
+    list_display = ("posting", "task_type", "task_id", "status", "updated_at")
+    list_filter = ("task_type", "status")
+    search_fields = ("posting__posting_number", "task_id")
+
+
+@admin.register(OzonBotSettings)
+class OzonBotSettingsAdmin(admin.ModelAdmin):
+    list_display = ("store", "pdf_sort_mode", "pdf_sort_ascending", "updated_at")
+    list_filter = ("pdf_sort_mode", "pdf_sort_ascending")
 
     fieldsets = (
         ('Основная информация', {

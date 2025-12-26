@@ -239,6 +239,7 @@ class OzonStoreSerializer(serializers.ModelSerializer):
             'name',
             'client_id',
             'api_key',
+            'api_key_invalid_at',
             'google_sheet_url',
             'performance_service_account_number',
             'performance_client_id',
@@ -246,7 +247,7 @@ class OzonStoreSerializer(serializers.ModelSerializer):
             'is_owner',
             'owner_username',
         ]
-        read_only_fields = ['id', 'is_owner', 'owner_username']
+        read_only_fields = ['id', 'is_owner', 'owner_username', 'api_key_invalid_at']
 
     def get_is_owner(self, obj):
         request = self.context.get('request')

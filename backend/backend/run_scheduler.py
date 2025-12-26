@@ -22,7 +22,7 @@ import django  # noqa: E402
 django.setup()
 
 from ozon.models import OzonSupplyBatch  # noqa: E402
-from ozon.tasks import process_supply_batch_sync, _cleanup_stale_drafts  # noqa: E402
+from ozon.tasks import process_supply_batch_sync, _cleanup_stale_drafts, _cleanup_old_postings  # noqa: E402
 
 
 logging.basicConfig(
@@ -75,6 +75,13 @@ def main():
                     logger.info(f"[cleanup] drafts={deleted_drafts} batches={deleted_batches}")
             except Exception as exc:  # noqa: BLE001
                 logger.error(f"[cleanup] error: {exc}")
+
+            try:
+                deleted_postings = _cleanup_old_postings()
+                if deleted_postings:
+                    logger.info(f"[cleanup] postings={deleted_postings}")
+            except Exception as exc:  # noqa: BLE001
+                logger.error(f"[cleanup] postings cleanup error: {exc}")
 
         except Exception as exc:  # noqa: BLE001
             logger.error(f"❌ scheduler loop error: {exc}")

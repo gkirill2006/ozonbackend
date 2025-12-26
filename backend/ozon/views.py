@@ -2,6 +2,9 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import generics, permissions, status
 from django.shortcuts import get_object_or_404
+from django.http import HttpResponse, FileResponse
+from django.conf import settings
+from django.core.cache import cache
 from users.models import User, OzonStore, StoreFilterSettings, StoreAccess
 from .models import (
     Product,
@@ -16,6 +19,11 @@ from .models import (
     DeliveryCluster,
     DeliveryClusterItemAnalytics,
     DeliveryAnalyticsSummary,
+    OzonFbsPosting,
+    OzonFbsPostingStatusHistory,
+    OzonFbsPostingPrintLog,
+    OzonBotSettings,
+    OzonFbsPostingLabel,
 )
 from .utils import (
     fetch_all_products_from_ozon,
@@ -25,17 +33,31 @@ from .utils import (
     fetch_fbs_sales,
     fetch_fbo_sales,
     fetch_fbs_stocks,
+    fetch_fbs_postings,
+    OzonApiError,
 )
 from .serializers import (
     DraftCreateSerializer,
     SupplyBatchStatusSerializer,
     SupplyBatchConfirmedSerializer,
+    FbsPostingSyncSerializer,
+    FbsPostingSerializer,
+    FbsPostingPrintSerializer,
+    BotSettingsSerializer,
+    FbsPostingRefreshSerializer,
+    FbsPostingLabelsSerializer,
 )
 import time
 from django.db.models import Sum, F, Count, Q
 from datetime import datetime, timedelta
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from collections import defaultdict
+import csv
+import os
+
+from PyPDF2 import PdfReader, PdfWriter
+import fitz
 from .tasks import (
     update_abc_sheet,
     create_or_update_AD,
@@ -59,6 +81,298 @@ def user_store_queryset(user):
             Q(user=user) | Q(accesses__user=user, accesses__status=StoreAccess.STATUS_ACCEPTED)
         )
         .distinct()
+    )
+
+
+POSTING_STATUSES = {
+    OzonFbsPosting.STATUS_AWAITING_PACKAGING,
+    OzonFbsPosting.STATUS_AWAITING_DELIVER,
+    OzonFbsPosting.STATUS_ACCEPTANCE_IN_PROGRESS,
+    OzonFbsPosting.STATUS_DELIVERING,
+    OzonFbsPosting.STATUS_DELIVERED,
+    OzonFbsPosting.STATUS_CANCELLED,
+}
+
+
+def _parse_iso_datetime(value):
+    if not value:
+        return None
+    dt = parse_datetime(value)
+    if dt and timezone.is_naive(dt):
+        dt = timezone.make_aware(dt, timezone.get_current_timezone())
+    return dt
+
+
+def _normalize_posting_status(raw_status):
+    return raw_status if raw_status in POSTING_STATUSES else OzonFbsPosting.STATUS_UNKNOWN
+
+
+POSTING_STATUS_FIELDS = {
+    OzonFbsPosting.STATUS_AWAITING_PACKAGING: "awaiting_packaging_at",
+    OzonFbsPosting.STATUS_AWAITING_DELIVER: "awaiting_deliver_at",
+    OzonFbsPosting.STATUS_ACCEPTANCE_IN_PROGRESS: "acceptance_in_progress_at",
+    OzonFbsPosting.STATUS_DELIVERING: "delivering_at",
+    OzonFbsPosting.STATUS_DELIVERED: "delivered_at",
+    OzonFbsPosting.STATUS_CANCELLED: "cancelled_at",
+}
+
+AUTO_SYNC_MIN_SECONDS = 30
+
+
+def _sync_cache_key(store_id, status):
+    return f"fbs_sync:{store_id}:{status}"
+
+
+def _get_last_sync_time(store_id, status):
+    key = _sync_cache_key(store_id, status)
+    ts = cache.get(key)
+    if not ts:
+        return None
+    return datetime.fromtimestamp(ts, tz=timezone.get_current_timezone())
+
+
+def _set_last_sync_time(store_id, status, sync_time):
+    key = _sync_cache_key(store_id, status)
+    cache.set(key, sync_time.timestamp(), timeout=3600)
+
+
+def _should_sync(store_id, status):
+    last = _get_last_sync_time(store_id, status)
+    if not last:
+        return True
+    return (timezone.now() - last).total_seconds() >= AUTO_SYNC_MIN_SECONDS
+
+
+def _resolve_sync_window(since, to):
+    if since is None and to is None:
+        to = timezone.now()
+        since = to - timedelta(days=90)
+    elif since is None and to is not None:
+        since = to - timedelta(days=90)
+    elif since is not None and to is None:
+        to = timezone.now()
+    return since, to
+
+
+def _sync_fbs_postings_for_status(store, status_value, since, to, limit, sync_time=None):
+    sync_time = sync_time or timezone.now()
+    try:
+        postings = fetch_fbs_postings(
+            store.client_id,
+            store.api_key,
+            status=status_value,
+            since=since,
+            to=to,
+            limit=limit,
+        )
+    except OzonApiError as exc:
+        if exc.status_code in (401, 403):
+            store.api_key_invalid_at = timezone.now()
+            store.save(update_fields=["api_key_invalid_at"])
+            raise
+        raise
+
+    created_count = 0
+    updated_count = 0
+    history_entries = []
+
+    posting_numbers = [p.get("posting_number") for p in postings if p.get("posting_number")]
+    existing = {}
+    if posting_numbers:
+        existing = {
+            p.posting_number: p
+            for p in OzonFbsPosting.objects.filter(store=store, posting_number__in=posting_numbers)
+        }
+
+    for item in postings:
+        posting_number = item.get("posting_number")
+        if not posting_number:
+            continue
+
+        posting = existing.get(posting_number)
+        is_new = posting is None
+        if is_new:
+            posting = OzonFbsPosting(store=store, posting_number=posting_number)
+
+        raw_status = (item.get("status") or "").strip()
+        normalized_status = _normalize_posting_status(raw_status)
+        old_status = posting.status
+        status_time = _parse_iso_datetime(
+            item.get("in_process_at")
+            or item.get("shipment_date")
+            or item.get("delivering_date")
+        ) or sync_time
+
+        status_changed = old_status != normalized_status
+        if status_changed:
+            posting.status = normalized_status
+            posting.status_changed_at = status_time
+
+        status_field = POSTING_STATUS_FIELDS.get(normalized_status)
+        if status_field and getattr(posting, status_field) is None:
+            setattr(posting, status_field, status_time)
+
+        if normalized_status in (
+            OzonFbsPosting.STATUS_DELIVERED,
+            OzonFbsPosting.STATUS_CANCELLED,
+        ) and posting.archived_at is None:
+            posting.archived_at = status_time
+        elif normalized_status not in (
+            OzonFbsPosting.STATUS_DELIVERED,
+            OzonFbsPosting.STATUS_CANCELLED,
+        ) and posting.archived_at is not None:
+            posting.archived_at = None
+
+        if normalized_status == OzonFbsPosting.STATUS_AWAITING_DELIVER:
+            if status_changed and not posting.labels_printed_at:
+                posting.needs_label = True
+        else:
+            posting.needs_label = False
+
+        delivery_method = item.get("delivery_method") or {}
+        posting.order_id = item.get("order_id") if item.get("order_id") is not None else posting.order_id
+        posting.order_number = item.get("order_number") or posting.order_number
+        posting.substatus = item.get("substatus") or posting.substatus
+        posting.tracking_number = item.get("tracking_number") or posting.tracking_number
+        posting.delivery_method_id = delivery_method.get("id")
+        posting.delivery_method_name = delivery_method.get("name") or ""
+        posting.delivery_method_warehouse_id = delivery_method.get("warehouse_id")
+        posting.delivery_method_warehouse = delivery_method.get("warehouse") or ""
+        posting.tpl_provider_id = delivery_method.get("tpl_provider_id")
+        posting.tpl_provider = delivery_method.get("tpl_provider") or ""
+        posting.tpl_integration_type = item.get("tpl_integration_type") or ""
+        posting.in_process_at = _parse_iso_datetime(item.get("in_process_at"))
+        posting.shipment_date = _parse_iso_datetime(item.get("shipment_date"))
+        posting.delivering_date = _parse_iso_datetime(item.get("delivering_date"))
+        posting.cancellation = item.get("cancellation")
+        posting.available_actions = item.get("available_actions")
+        posting.products = item.get("products")
+        posting.raw_payload = item
+        posting.last_seen_at = sync_time
+        posting.last_synced_at = sync_time
+
+        posting.save()
+
+        if is_new:
+            created_count += 1
+        else:
+            updated_count += 1
+
+        if status_changed or is_new:
+            history_entries.append(
+                OzonFbsPostingStatusHistory(
+                    posting=posting,
+                    status=normalized_status,
+                    changed_at=status_time,
+                    source=OzonFbsPostingStatusHistory.SOURCE_OZON,
+                    payload={"status_raw": raw_status} if raw_status else None,
+                )
+            )
+
+    if history_entries:
+        OzonFbsPostingStatusHistory.objects.bulk_create(history_entries)
+
+    return {
+        "synced": len(postings),
+        "created": created_count,
+        "updated": updated_count,
+        "sync_time": sync_time,
+        "posting_numbers": posting_numbers,
+    }
+
+
+def _get_posting_counts(store, include_archived=True):
+    qs = OzonFbsPosting.objects.filter(store=store)
+    if not include_archived:
+        qs = qs.filter(archived_at__isnull=True)
+    counts = {item["status"]: item["count"] for item in qs.values("status").annotate(count=Count("id"))}
+    response_counts = {status: counts.get(status, 0) for status in POSTING_STATUSES}
+    response_counts["unknown"] = counts.get(OzonFbsPosting.STATUS_UNKNOWN, 0)
+    return response_counts, sum(counts.values())
+
+
+def _ensure_label_dir(store_id):
+    labels_dir = os.path.join(settings.MEDIA_ROOT, "ozon", "labels", str(store_id))
+    os.makedirs(labels_dir, exist_ok=True)
+    return labels_dir
+
+
+def _download_label_file(file_url, target_path):
+    resp = requests.get(file_url, timeout=60)
+    resp.raise_for_status()
+    with open(target_path, "wb") as output:
+        output.write(resp.content)
+
+
+def _fetch_label_task_status(store, task_id):
+    url = "https://api-seller.ozon.ru/v1/posting/fbs/package-label/get"
+    headers = {
+        "Client-Id": store.client_id,
+        "Api-Key": store.api_key,
+        "Content-Type": "application/json",
+    }
+    resp = requests.post(url, headers=headers, json={"task_id": task_id})
+    return resp
+
+
+def _resolve_label_font_path():
+    candidates = [
+        os.path.join(settings.BASE_DIR.parent, "posting_bot", "code", "app", "Inter.ttf"),
+        os.path.join(settings.BASE_DIR, "Inter.ttf"),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def _annotate_label_pdf(input_pdf, output_pdf, posting_number, quantity, font_path, extra_width=25):
+    doc = fitz.open(input_pdf)
+    font = fitz.Font(fontfile=font_path) if font_path else None
+    found = False
+    for page in doc:
+        if posting_number in (page.get_text() or ""):
+            found = True
+            _append_quantity_label(page, quantity, font, extra_width)
+    if not found and doc.page_count:
+        page = doc[0]
+        _append_quantity_label(page, quantity, font, extra_width)
+    doc.save(output_pdf)
+    doc.close()
+
+
+def _append_quantity_label(page, quantity, font, extra_width):
+    rect = page.rect
+    new_rect = fitz.Rect(0, 0, rect.width + extra_width, rect.height)
+    page.set_mediabox(new_rect)
+
+    new_rect = fitz.Rect(
+        rect.x0 - extra_width,
+        rect.y0,
+        rect.x1,
+        rect.y1,
+    )
+    page.set_mediabox(new_rect)
+    text_rect = fitz.Rect(
+        x0=0,
+        y0=0,
+        x1=extra_width,
+        y1=new_rect.y1,
+    )
+
+    if font:
+        page.insert_font(fontname="F0", fontbuffer=font.buffer)
+        fontname = "F0"
+    else:
+        fontname = "helv"
+
+    page.insert_textbox(
+        rect=text_rect,
+        buffer=f"Кол-во товара: {quantity} шт.",
+        fontname=fontname,
+        fontsize=16,
+        rotate=270,
+        align=1,
     )
 # Наполянем модель товароми
 class SyncOzonProductView(APIView):
@@ -2830,3 +3144,669 @@ class PlanerPivotView(Planer_View):
         })
         resp["X-Execution-Time-s"] = base_response.headers.get("X-Execution-Time-s")
         return resp
+
+
+class FbsPostingSyncView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        serializer = FbsPostingSyncSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = serializer.validated_data
+        store = get_object_or_404(user_store_queryset(request.user), id=data["store_id"])
+        status_value = (data.get("status") or "").strip() or None
+        since = data.get("since")
+        to = data.get("to")
+        limit = data.get("limit") or 1000
+        return_data = data.get("return_data", True)
+
+        since, to = _resolve_sync_window(since, to)
+        since_str = since.isoformat() if since else None
+        to_str = to.isoformat() if to else None
+
+        try:
+            result = _sync_fbs_postings_for_status(store, status_value, since_str, to_str, limit)
+        except OzonApiError as exc:
+            if exc.status_code in (401, 403):
+                store.api_key_invalid_at = timezone.now()
+                store.save(update_fields=["api_key_invalid_at"])
+                return Response(
+                    {"error": "Необходимо заменить API ключ", "detail": exc.response_text},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+            return Response({"error": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+
+        response_payload = {
+            "synced": result["synced"],
+            "created": result["created"],
+            "updated": result["updated"],
+        }
+
+        if return_data:
+            qs = OzonFbsPosting.objects.filter(store=store)
+            if status_value:
+                filter_status = status_value if status_value in POSTING_STATUSES else OzonFbsPosting.STATUS_UNKNOWN
+                qs = qs.filter(status=filter_status)
+            response_payload["postings"] = FbsPostingSerializer(
+                qs.order_by("-status_changed_at", "-updated_at"),
+                many=True,
+            ).data
+
+        return Response(response_payload, status=status.HTTP_200_OK)
+
+
+class FbsPostingListView(generics.ListAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = FbsPostingSerializer
+
+    def get_queryset(self):
+        store_id = self.request.query_params.get("store_id")
+        if not store_id:
+            return OzonFbsPosting.objects.none()
+
+        store = get_object_or_404(user_store_queryset(self.request.user), id=store_id)
+        qs = OzonFbsPosting.objects.filter(store=store).prefetch_related("labels")
+        status_param = self.request.query_params.get("status")
+        if status_param:
+            statuses = [s.strip() for s in status_param.split(",") if s.strip()]
+            if statuses:
+                sync_needed_statuses = set(statuses) & {
+                    OzonFbsPosting.STATUS_AWAITING_PACKAGING,
+                    OzonFbsPosting.STATUS_AWAITING_DELIVER,
+                }
+                if sync_needed_statuses:
+                    force_refresh = self.request.query_params.get("force_refresh") in ("1", "true", "True")
+                    since_param = self.request.query_params.get("since")
+                    to_param = self.request.query_params.get("to")
+                    since = _parse_iso_datetime(since_param) if since_param else None
+                    to = _parse_iso_datetime(to_param) if to_param else None
+                    since, to = _resolve_sync_window(since, to)
+                    since_str = since.isoformat() if since else None
+                    to_str = to.isoformat() if to else None
+                    for status_value in sync_needed_statuses:
+                        if force_refresh or _should_sync(store.id, status_value):
+                            result = _sync_fbs_postings_for_status(
+                                store,
+                                status_value,
+                                since_str,
+                                to_str,
+                                limit=1000,
+                            )
+                            _set_last_sync_time(store.id, status_value, result["sync_time"])
+
+                qs = qs.filter(status__in=statuses)
+
+                if len(statuses) == 1 and statuses[0] in sync_needed_statuses:
+                    last_sync = _get_last_sync_time(store.id, statuses[0])
+                    if last_sync:
+                        qs = qs.filter(last_seen_at__gte=last_sync)
+
+        needs_label = self.request.query_params.get("needs_label")
+        if needs_label in ("1", "true", "True"):
+            qs = qs.filter(needs_label=True)
+
+        include_archived = self.request.query_params.get("include_archived")
+        if include_archived not in ("1", "true", "True"):
+            qs = qs.filter(archived_at__isnull=True)
+
+        return qs.order_by("-status_changed_at", "-updated_at")
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        label_type = request.query_params.get("label_type") or OzonFbsPostingLabel.TASK_TYPE_BIG
+        serializer = self.get_serializer(
+            queryset,
+            many=True,
+            context={"label_type": label_type},
+        )
+
+        store_id = request.query_params.get("store_id")
+        status_param = request.query_params.get("status") or ""
+        counts = None
+        total = None
+        if store_id:
+            store = get_object_or_404(user_store_queryset(request.user), id=store_id)
+            counts, total = _get_posting_counts(store, include_archived=True)
+
+        return Response(
+            {
+                "store_id": int(store_id) if store_id else None,
+                "status": status_param,
+                "count": queryset.count(),
+                "counts": counts or {},
+                "total": total or 0,
+                "postings": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class FbsPostingCountsView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        store_id = request.query_params.get("store_id")
+        if not store_id:
+            return Response({"error": "store_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        store = get_object_or_404(user_store_queryset(request.user), id=store_id)
+        include_archived = request.query_params.get("include_archived")
+        include_archived_flag = include_archived not in ("0", "false", "False")
+        response_counts, total = _get_posting_counts(store, include_archived=include_archived_flag)
+
+        return Response(
+            {
+                "store_id": store.id,
+                "counts": response_counts,
+                "total": total,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class FbsPostingRefreshView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        serializer = FbsPostingRefreshSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = serializer.validated_data
+        store = get_object_or_404(user_store_queryset(request.user), id=data["store_id"])
+        status_value = (data.get("status") or OzonFbsPosting.STATUS_AWAITING_PACKAGING).strip()
+        since, to = _resolve_sync_window(data.get("since"), data.get("to"))
+        since_str = since.isoformat() if since else None
+        to_str = to.isoformat() if to else None
+        limit = data.get("limit") or 1000
+
+        try:
+            sync_results = {}
+            for status_value in (
+                OzonFbsPosting.STATUS_AWAITING_PACKAGING,
+                OzonFbsPosting.STATUS_AWAITING_DELIVER,
+            ):
+                result = _sync_fbs_postings_for_status(
+                    store,
+                    status_value,
+                    since_str,
+                    to_str,
+                    limit,
+                )
+                _set_last_sync_time(store.id, status_value, result["sync_time"])
+                sync_results[status_value] = result
+        except OzonApiError as exc:
+            if exc.status_code in (401, 403):
+                store.api_key_invalid_at = timezone.now()
+                store.save(update_fields=["api_key_invalid_at"])
+                return Response(
+                    {"error": "Необходимо заменить API ключ", "detail": exc.response_text},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+            return Response({"error": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+
+        response_counts, total = _get_posting_counts(store, include_archived=True)
+        postings_qs = (
+            OzonFbsPosting.objects
+            .filter(store=store, status=status_value)
+            .prefetch_related("labels")
+        )
+        last_sync = _get_last_sync_time(store.id, status_value)
+        if last_sync:
+            postings_qs = postings_qs.filter(last_seen_at__gte=last_sync)
+        postings = FbsPostingSerializer(
+            postings_qs.order_by("-status_changed_at", "-updated_at"),
+            many=True,
+        ).data
+
+        return Response(
+            {
+                "store_id": store.id,
+                "status": status_value,
+                "count": response_counts.get(status_value, 0),
+                "counts": response_counts,
+                "total": total,
+                "sync": sync_results,
+                "postings": postings,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class FbsPostingPrintView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        serializer = FbsPostingPrintSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = serializer.validated_data
+        store = get_object_or_404(user_store_queryset(request.user), id=data["store_id"])
+        posting_numbers = data.get("posting_numbers") or []
+        posting_ids = data.get("posting_ids") or []
+        force = data.get("force", False)
+
+        qs = OzonFbsPosting.objects.filter(store=store)
+        if posting_numbers:
+            qs = qs.filter(posting_number__in=posting_numbers)
+        if posting_ids:
+            qs = qs.filter(id__in=posting_ids)
+
+        postings = list(qs)
+        if not postings:
+            return Response({"error": "No postings found"}, status=status.HTTP_404_NOT_FOUND)
+
+        already_printed = [p.posting_number for p in postings if p.print_count > 0]
+        if already_printed and not force:
+            return Response(
+                {
+                    "error": "already_printed",
+                    "message": "Этот заказ уже был распечатан, вы уверены?",
+                    "posting_numbers": already_printed,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        now = timezone.now()
+        logs = []
+        for posting in postings:
+            posting.print_count += 1
+            posting.labels_printed_at = now
+            posting.needs_label = False
+            posting.updated_at = now
+            logs.append(
+                OzonFbsPostingPrintLog(
+                    posting=posting,
+                    user=request.user,
+                    forced=force,
+                )
+            )
+
+        OzonFbsPosting.objects.bulk_update(
+            postings,
+            ["print_count", "labels_printed_at", "needs_label", "updated_at"],
+        )
+        OzonFbsPostingPrintLog.objects.bulk_create(logs)
+
+        return Response(
+            {"printed": len(postings), "posting_numbers": [p.posting_number for p in postings]},
+            status=status.HTTP_200_OK,
+        )
+
+
+class FbsPostingLabelsView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        serializer = FbsPostingLabelsSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = serializer.validated_data
+        store = get_object_or_404(user_store_queryset(request.user), id=data["store_id"])
+        posting_numbers = data["posting_numbers"]
+        label_type = data.get("label_type") or OzonFbsPostingLabel.TASK_TYPE_BIG
+        wait_seconds = data.get("wait_seconds") or 0
+
+        since, to = _resolve_sync_window(None, None)
+        since_str = since.isoformat() if since else None
+        to_str = to.isoformat() if to else None
+        try:
+            result = _sync_fbs_postings_for_status(
+                store,
+                OzonFbsPosting.STATUS_AWAITING_DELIVER,
+                since_str,
+                to_str,
+                limit=1000,
+            )
+            _set_last_sync_time(store.id, OzonFbsPosting.STATUS_AWAITING_DELIVER, result["sync_time"])
+            last_sync = result["sync_time"]
+        except OzonApiError as exc:
+            if exc.status_code in (401, 403):
+                store.api_key_invalid_at = timezone.now()
+                store.save(update_fields=["api_key_invalid_at"])
+                return Response(
+                    {"error": "Необходимо заменить API ключ", "detail": exc.response_text},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+            return Response({"error": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+
+        postings = list(
+            OzonFbsPosting.objects.filter(store=store, posting_number__in=posting_numbers)
+            .prefetch_related("labels")
+        )
+        postings_map = {p.posting_number: p for p in postings}
+        missing = [num for num in posting_numbers if num not in postings_map]
+
+        labels_dir = _ensure_label_dir(store.id)
+        ready_files = {}
+        pending = []
+        errors = []
+
+        create_url = "https://api-seller.ozon.ru/v2/posting/fbs/package-label/create"
+        headers = {
+            "Client-Id": store.client_id,
+            "Api-Key": store.api_key,
+            "Content-Type": "application/json",
+        }
+
+        for posting_number in posting_numbers:
+            posting = postings_map.get(posting_number)
+            if not posting:
+                errors.append({"posting_number": posting_number, "error": "not_found"})
+                continue
+
+            if posting.status != OzonFbsPosting.STATUS_AWAITING_DELIVER:
+                errors.append({"posting_number": posting_number, "error": f"invalid_status:{posting.status}"})
+                continue
+
+            if last_sync and (not posting.last_seen_at or posting.last_seen_at < last_sync):
+                errors.append({"posting_number": posting_number, "error": "not_in_awaiting_deliver"})
+                continue
+
+            label = OzonFbsPostingLabel.objects.filter(posting=posting, task_type=label_type).first()
+            if label and label.status == "completed" and label.file_path and os.path.exists(label.file_path):
+                ready_files[posting_number] = label.file_path
+                continue
+
+            if not label:
+                resp = requests.post(
+                    create_url,
+                    headers=headers,
+                    json={"posting_number": [posting_number]},
+                )
+                if resp.status_code in (401, 403):
+                    store.api_key_invalid_at = timezone.now()
+                    store.save(update_fields=["api_key_invalid_at"])
+                    return Response(
+                        {"error": "Необходимо заменить API ключ", "detail": resp.text},
+                        status=status.HTTP_401_UNAUTHORIZED,
+                    )
+                if resp.status_code >= 400:
+                    errors.append({"posting_number": posting_number, "error": resp.text})
+                    continue
+
+                resp_data = resp.json()
+                tasks = (resp_data.get("result") or {}).get("tasks") or []
+                for task in tasks:
+                    task_type = task.get("task_type") or ""
+                    task_id = task.get("task_id")
+                    if not task_id or not task_type:
+                        continue
+                    OzonFbsPostingLabel.objects.update_or_create(
+                        posting=posting,
+                        task_type=task_type,
+                        defaults={
+                            "task_id": task_id,
+                            "status": "",
+                            "response_payload": resp_data,
+                            "error_message": "",
+                        },
+                    )
+                label = OzonFbsPostingLabel.objects.filter(posting=posting, task_type=label_type).first()
+                time.sleep(0.3)
+
+            if not label:
+                errors.append({"posting_number": posting_number, "error": "task_not_created"})
+                continue
+
+            if wait_seconds:
+                time.sleep(wait_seconds)
+
+            resp = _fetch_label_task_status(store, label.task_id)
+            label.last_checked_at = timezone.now()
+            if resp.status_code in (401, 403):
+                store.api_key_invalid_at = timezone.now()
+                store.save(update_fields=["api_key_invalid_at"])
+                return Response(
+                    {"error": "Необходимо заменить API ключ", "detail": resp.text},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+            if resp.status_code >= 400:
+                label.error_message = resp.text[:500]
+                label.status = "error"
+                label.save(update_fields=["status", "error_message", "last_checked_at", "updated_at"])
+                errors.append({"posting_number": posting_number, "error": resp.text})
+                continue
+
+            resp_data = resp.json()
+            result = resp_data.get("result") or {}
+            label.status = result.get("status") or label.status
+            label.file_url = result.get("file_url") or ""
+            label.response_payload = resp_data
+            label.error_message = result.get("error") or ""
+
+            if label.status == "completed" and label.file_url:
+                file_name = f"{posting_number}_{label.task_id}_{label.task_type}.pdf"
+                target_path = os.path.join(labels_dir, file_name)
+                if not os.path.exists(target_path):
+                    try:
+                        _download_label_file(label.file_url, target_path)
+                    except requests.RequestException as exc:
+                        label.error_message = str(exc)[:500]
+                        label.status = "error"
+                        label.save(update_fields=["status", "error_message", "file_url", "response_payload", "last_checked_at", "updated_at"])
+                        errors.append({"posting_number": posting_number, "error": str(exc)})
+                        continue
+
+                label.file_path = target_path
+                label.save(update_fields=["status", "file_url", "file_path", "response_payload", "last_checked_at", "updated_at"])
+                ready_files[posting_number] = target_path
+                if posting.needs_label:
+                    posting.needs_label = False
+                    posting.save(update_fields=["needs_label", "updated_at"])
+            else:
+                label.save(update_fields=["status", "file_url", "response_payload", "error_message", "last_checked_at", "updated_at"])
+                pending.append(posting_number)
+
+        for num in missing:
+            errors.append({"posting_number": num, "error": "not_found"})
+
+        if pending or errors:
+            return Response(
+                {
+                    "status": "pending",
+                    "ready": list(ready_files.keys()),
+                    "pending": pending,
+                    "errors": errors,
+                },
+                status=status.HTTP_202_ACCEPTED,
+            )
+
+        font_path = _resolve_label_font_path()
+        annotated_dir = os.path.join(labels_dir, "annotated")
+        os.makedirs(annotated_dir, exist_ok=True)
+        annotated_files = {}
+        for posting_number, file_path in ready_files.items():
+            posting = postings_map.get(posting_number)
+            quantity_total = 0
+            if posting and posting.products:
+                quantity_total = sum((p.get("quantity") or 0) for p in posting.products)
+            annotated_name = f"{posting_number}_{label_type}_qty.pdf"
+            annotated_path = os.path.join(annotated_dir, annotated_name)
+            if not os.path.exists(annotated_path):
+                try:
+                    _annotate_label_pdf(
+                        input_pdf=file_path,
+                        output_pdf=annotated_path,
+                        posting_number=posting_number,
+                        quantity=quantity_total,
+                        font_path=font_path,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logging.error("Label annotate error for %s: %s", posting_number, exc)
+                    annotated_path = file_path
+            annotated_files[posting_number] = annotated_path
+
+        ordered_files = [annotated_files[num] for num in posting_numbers if num in annotated_files]
+        if not ordered_files:
+            return Response({"error": "no_labels_ready"}, status=status.HTTP_400_BAD_REQUEST)
+
+        merged_dir = os.path.join(labels_dir, "merged")
+        os.makedirs(merged_dir, exist_ok=True)
+        merged_name = f"labels_{store.id}_{int(time.time())}.pdf"
+        merged_path = os.path.join(merged_dir, merged_name)
+
+        writer = PdfWriter()
+        for file_path in ordered_files:
+            reader = PdfReader(file_path)
+            for page in reader.pages:
+                writer.add_page(page)
+
+        with open(merged_path, "wb") as output:
+            writer.write(output)
+
+        response = FileResponse(open(merged_path, "rb"), content_type="application/pdf")
+        response["Content-Disposition"] = f'attachment; filename="{merged_name}"'
+        response["X-Labels-Count"] = str(len(ordered_files))
+        return response
+
+
+class FbsPostingExportView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        store_id = request.query_params.get("store_id")
+        if not store_id:
+            return Response({"error": "store_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        store = get_object_or_404(user_store_queryset(request.user), id=store_id)
+        qs = OzonFbsPosting.objects.filter(store=store).order_by("-status_changed_at")
+
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = "attachment; filename=fbs_postings.csv"
+        writer = csv.writer(response)
+        writer.writerow([
+            "posting_number",
+            "awaiting_packaging_at",
+            "awaiting_deliver_at",
+            "acceptance_in_progress_at",
+            "delivering_at",
+            "delivered_at",
+            "cancelled_at",
+        ])
+
+        for posting in qs:
+            writer.writerow([
+                posting.posting_number,
+                posting.awaiting_packaging_at.isoformat() if posting.awaiting_packaging_at else "",
+                posting.awaiting_deliver_at.isoformat() if posting.awaiting_deliver_at else "",
+                posting.acceptance_in_progress_at.isoformat() if posting.acceptance_in_progress_at else "",
+                posting.delivering_at.isoformat() if posting.delivering_at else "",
+                posting.delivered_at.isoformat() if posting.delivered_at else "",
+                posting.cancelled_at.isoformat() if posting.cancelled_at else "",
+            ])
+
+        return response
+
+
+class BotSettingsView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_store(self, request):
+        store_id = request.query_params.get("store_id") or request.data.get("store_id")
+        if not store_id:
+            raise ValueError("store_id is required")
+        return get_object_or_404(user_store_queryset(request.user), id=store_id)
+
+    def get(self, request):
+        try:
+            store = self.get_store(request)
+        except ValueError:
+            return Response({"error": "store_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        settings, _ = OzonBotSettings.objects.get_or_create(store=store)
+        serializer = BotSettingsSerializer(settings)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        try:
+            store = self.get_store(request)
+        except ValueError:
+            return Response({"error": "store_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if store.user != request.user:
+            return Response({"error": "Только владелец может менять настройки"}, status=status.HTTP_403_FORBIDDEN)
+
+        settings, _ = OzonBotSettings.objects.get_or_create(store=store)
+        serializer = BotSettingsSerializer(settings, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class FbsPostingSummaryView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        store_id = request.query_params.get("store_id")
+        if not store_id:
+            return Response({"error": "store_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        store = get_object_or_404(user_store_queryset(request.user), id=store_id)
+        period_days = int(request.query_params.get("period_days", 1))
+        avg_days = int(request.query_params.get("avg_days", 14))
+        risk_days = int(request.query_params.get("risk_days", 2))
+        now = timezone.now()
+
+        period_start = now - timedelta(days=period_days)
+        avg_start = now - timedelta(days=avg_days)
+        risk_start = now - timedelta(days=risk_days)
+
+        delivering_count = OzonFbsPosting.objects.filter(
+            store=store,
+            delivering_at__gte=period_start,
+        ).count()
+
+        total_active_count = OzonFbsPosting.objects.filter(
+            store=store,
+            status__in=[
+                OzonFbsPosting.STATUS_AWAITING_PACKAGING,
+                OzonFbsPosting.STATUS_AWAITING_DELIVER,
+                OzonFbsPosting.STATUS_ACCEPTANCE_IN_PROGRESS,
+                OzonFbsPosting.STATUS_DELIVERING,
+            ],
+        ).count()
+
+        not_delivered_qs = OzonFbsPosting.objects.filter(
+            store=store,
+            status=OzonFbsPosting.STATUS_AWAITING_DELIVER,
+        )
+
+        risk_qs = OzonFbsPosting.objects.filter(
+            store=store,
+            status=OzonFbsPosting.STATUS_ACCEPTANCE_IN_PROGRESS,
+            acceptance_in_progress_at__lt=risk_start,
+        )
+
+        avg_candidates = OzonFbsPosting.objects.filter(
+            store=store,
+            delivering_at__isnull=False,
+            awaiting_deliver_at__isnull=False,
+            delivering_at__gte=avg_start,
+        )
+
+        durations = [
+            (p.delivering_at - p.awaiting_deliver_at).total_seconds()
+            for p in avg_candidates
+            if p.delivering_at and p.awaiting_deliver_at
+        ]
+        avg_hours = round((sum(durations) / len(durations)) / 3600, 2) if durations else 0
+
+        return Response(
+            {
+                "delivering_count": delivering_count,
+                "total_active_count": total_active_count,
+                "not_delivered_count": not_delivered_qs.count(),
+                "not_delivered_postings": list(not_delivered_qs.values_list("posting_number", flat=True)),
+                "avg_deliver_hours": avg_hours,
+                "risk_postings": list(risk_qs.values_list("posting_number", flat=True)),
+                "risk_days": risk_days,
+            },
+            status=status.HTTP_200_OK,
+        )

@@ -13,6 +13,7 @@ from .models import (
     OzonWarehouseDirectory,
     OzonSupplyBatch,
     OzonSupplyDraft,
+    OzonFbsPosting,
     Sale,
     FbsStock,
     ProductDailyAnalytics,
@@ -6935,6 +6936,15 @@ def _cleanup_stale_drafts():
     if empty_count:
         empty_batches.delete()
     return deleted, empty_count
+
+
+def _cleanup_old_postings(days=45):
+    cutoff = timezone.now() - timedelta(days=days)
+    qs = OzonFbsPosting.objects.filter(archived_at__lt=cutoff)
+    deleted = qs.count()
+    if deleted:
+        qs.delete()
+    return deleted
 
 
 def process_supply_batch_sync(batch_uuid: str):

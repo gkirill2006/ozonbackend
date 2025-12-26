@@ -199,6 +199,185 @@ class OzonSupplyDraft(models.Model):
     def __str__(self):
         return f"Draft {self.operation_id or 'pending'} for cluster {self.logistic_cluster_name}"
 
+# FBS posting tracking for bot/front
+class OzonFbsPosting(models.Model):
+    STATUS_AWAITING_PACKAGING = "awaiting_packaging"
+    STATUS_AWAITING_DELIVER = "awaiting_deliver"
+    STATUS_ACCEPTANCE_IN_PROGRESS = "acceptance_in_progress"
+    STATUS_DELIVERING = "delivering"
+    STATUS_DELIVERED = "delivered"
+    STATUS_CANCELLED = "cancelled"
+    STATUS_UNKNOWN = "unknown"
+
+    STATUS_CHOICES = [
+        (STATUS_AWAITING_PACKAGING, "Awaiting packaging"),
+        (STATUS_AWAITING_DELIVER, "Awaiting deliver"),
+        (STATUS_ACCEPTANCE_IN_PROGRESS, "Acceptance in progress"),
+        (STATUS_DELIVERING, "Delivering"),
+        (STATUS_DELIVERED, "Delivered"),
+        (STATUS_CANCELLED, "Cancelled"),
+        (STATUS_UNKNOWN, "Unknown"),
+    ]
+
+    store = models.ForeignKey(OzonStore, on_delete=models.CASCADE, related_name="fbs_postings")
+    posting_number = models.CharField(max_length=64)
+    order_id = models.BigIntegerField(null=True, blank=True)
+    order_number = models.CharField(max_length=64, blank=True)
+    status = models.CharField(max_length=32, choices=STATUS_CHOICES, default=STATUS_UNKNOWN)
+    substatus = models.CharField(max_length=64, blank=True)
+
+    delivery_method_id = models.BigIntegerField(null=True, blank=True)
+    delivery_method_name = models.CharField(max_length=255, blank=True)
+    delivery_method_warehouse_id = models.BigIntegerField(null=True, blank=True)
+    delivery_method_warehouse = models.CharField(max_length=255, blank=True)
+    tpl_provider_id = models.BigIntegerField(null=True, blank=True)
+    tpl_provider = models.CharField(max_length=255, blank=True)
+    tpl_integration_type = models.CharField(max_length=64, blank=True)
+
+    tracking_number = models.CharField(max_length=128, blank=True)
+    in_process_at = models.DateTimeField(null=True, blank=True)
+    shipment_date = models.DateTimeField(null=True, blank=True)
+    delivering_date = models.DateTimeField(null=True, blank=True)
+
+    cancellation = models.JSONField(null=True, blank=True)
+    available_actions = models.JSONField(null=True, blank=True)
+    products = models.JSONField(null=True, blank=True)
+    raw_payload = models.JSONField(null=True, blank=True)
+
+    status_changed_at = models.DateTimeField(null=True, blank=True)
+    awaiting_packaging_at = models.DateTimeField(null=True, blank=True)
+    awaiting_deliver_at = models.DateTimeField(null=True, blank=True)
+    acceptance_in_progress_at = models.DateTimeField(null=True, blank=True)
+    delivering_at = models.DateTimeField(null=True, blank=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    archived_at = models.DateTimeField(null=True, blank=True)
+
+    needs_label = models.BooleanField(default=False)
+    labels_printed_at = models.DateTimeField(null=True, blank=True)
+    print_count = models.PositiveIntegerField(default=0)
+
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+    last_synced_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("store", "posting_number")
+        indexes = [
+            models.Index(fields=["store", "status"]),
+            models.Index(fields=["store", "posting_number"]),
+            models.Index(fields=["status", "archived_at"]),
+        ]
+        verbose_name = "FBS posting"
+        verbose_name_plural = "FBS postings"
+
+    def __str__(self):
+        return f"{self.posting_number} ({self.status})"
+
+
+class OzonFbsPostingStatusHistory(models.Model):
+    SOURCE_OZON = "ozon"
+    SOURCE_BOT = "bot"
+    SOURCE_SYSTEM = "system"
+
+    SOURCE_CHOICES = [
+        (SOURCE_OZON, "Ozon"),
+        (SOURCE_BOT, "Bot"),
+        (SOURCE_SYSTEM, "System"),
+    ]
+
+    posting = models.ForeignKey(
+        OzonFbsPosting,
+        on_delete=models.CASCADE,
+        related_name="status_history",
+    )
+    status = models.CharField(max_length=32)
+    changed_at = models.DateTimeField()
+    source = models.CharField(max_length=16, choices=SOURCE_CHOICES, default=SOURCE_OZON)
+    payload = models.JSONField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["posting", "status"]),
+            models.Index(fields=["changed_at"]),
+        ]
+        verbose_name = "FBS posting status history"
+        verbose_name_plural = "FBS posting status history"
+
+
+class OzonFbsPostingPrintLog(models.Model):
+    posting = models.ForeignKey(
+        OzonFbsPosting,
+        on_delete=models.CASCADE,
+        related_name="print_logs",
+    )
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    forced = models.BooleanField(default=False)
+    printed_at = models.DateTimeField(auto_now_add=True)
+    meta = models.JSONField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "FBS posting print log"
+        verbose_name_plural = "FBS posting print logs"
+
+
+class OzonFbsPostingLabel(models.Model):
+    TASK_TYPE_BIG = "big_label"
+    TASK_TYPE_SMALL = "small_label"
+
+    TASK_TYPE_CHOICES = [
+        (TASK_TYPE_BIG, "Big label"),
+        (TASK_TYPE_SMALL, "Small label"),
+    ]
+
+    posting = models.ForeignKey(
+        OzonFbsPosting,
+        on_delete=models.CASCADE,
+        related_name="labels",
+    )
+    task_id = models.BigIntegerField()
+    task_type = models.CharField(max_length=32, choices=TASK_TYPE_CHOICES)
+    status = models.CharField(max_length=32, blank=True)
+    file_url = models.URLField(blank=True)
+    file_path = models.CharField(max_length=512, blank=True)
+    response_payload = models.JSONField(null=True, blank=True)
+    error_message = models.TextField(blank=True)
+    last_checked_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("posting", "task_type")
+        indexes = [
+            models.Index(fields=["posting", "task_type"]),
+            models.Index(fields=["status"]),
+        ]
+        verbose_name = "FBS posting label"
+        verbose_name_plural = "FBS posting labels"
+
+
+class OzonBotSettings(models.Model):
+    SORT_OFFER_ID = "offer_id"
+    SORT_WEIGHT = "weight"
+    SORT_CREATED_AT = "created_at"
+
+    SORT_CHOICES = [
+        (SORT_OFFER_ID, "Offer ID"),
+        (SORT_WEIGHT, "Weight"),
+        (SORT_CREATED_AT, "Created at"),
+    ]
+
+    store = models.OneToOneField(OzonStore, on_delete=models.CASCADE, related_name="bot_settings")
+    pdf_sort_mode = models.CharField(max_length=32, choices=SORT_CHOICES, default=SORT_CREATED_AT)
+    pdf_sort_ascending = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Bot settings"
+        verbose_name_plural = "Bot settings"
+
 # Модель для хранения продаж FBS+FBO
 class Sale(models.Model):
     FBO = 'FBO'

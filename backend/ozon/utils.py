@@ -10,6 +10,13 @@ from django.utils import timezone
 from users.models import OzonStore
 logger = logging.getLogger(__name__)
 
+
+class OzonApiError(Exception):
+    def __init__(self, message, status_code=None, response_text=None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.response_text = response_text
+
 def fetch_all_products_from_ozon(client_id, api_key):
     """
     Возвращает все товары с Ozon API.
@@ -330,6 +337,63 @@ def fetch_fbs_sales(client_id, api_key, days: int = 7):
     logging.info(f"Fetched {len(result)} FBS sales")
     return result
 
+
+def fetch_fbs_postings(client_id, api_key, status=None, since=None, to=None, limit=1000):
+    url = "https://api-seller.ozon.ru/v3/posting/fbs/list"
+    headers = {
+        "Client-Id": client_id,
+        "Api-Key": api_key,
+        "Content-Type": "application/json"
+    }
+
+    now = timezone.now()
+    if not since and not to:
+        to = now.isoformat()
+        since = (now - timedelta(days=90)).isoformat()
+    elif not since and to:
+        since = (now - timedelta(days=90)).isoformat()
+    elif since and not to:
+        to = now.isoformat()
+
+    items = []
+    offset = 0
+    status_value = status or ""
+
+    while True:
+        payload = {
+            "dir": "ASC",
+            "filter": {
+                "since": since,
+                "to": to,
+                "status": status_value,
+            },
+            "limit": limit,
+            "offset": offset,
+            "with": {
+                "analytics_data": True,
+                "financial_data": True,
+            },
+        }
+
+        resp = requests.post(url, headers=headers, json=payload)
+        if resp.status_code != 200:
+            raise OzonApiError(
+                f"Ozon API error: {resp.status_code} {resp.text}",
+                status_code=resp.status_code,
+                response_text=resp.text,
+            )
+
+        chunk = resp.json().get("result", {}).get("postings", [])
+        if not chunk:
+            break
+
+        items.extend(chunk)
+        offset += len(chunk)
+        if len(chunk) < limit:
+            break
+        time.sleep(0.2)
+
+    return items
 
 def fetch_fbs_stocks(client_id, api_key, sku_list):
     

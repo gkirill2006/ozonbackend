@@ -287,3 +287,306 @@ Authorization: Bearer <JWT>
 - Список приглашений для текущего пользователя: `GET /auth/stores/invites/` → массив `{ store_id, store_name, status, invited_by, created_at }`. Возвращаются только `pending`/`rejected` (accepted не отдаются). По нему фронт понимает, что пришло новое приглашение и показывает кнопку принять/отклонить.
 - Список всех пользователей с доступом к магазину (только владелец): `GET /auth/stores/<store_id>/accesses/` → `[ { user_id, username, telegram_id, status, invited_by, is_owner } ]`.
 - Отозвать доступ конкретного пользователя (только владелец): `DELETE /auth/stores/<store_id>/accesses/<user_id>/`.
+
+---
+
+## FBS заказы (бот + фронт)
+
+### Статусы OZON
+- `awaiting_packaging` — ожидает сборки
+- `awaiting_deliver` — ожидает отгрузки
+- `acceptance_in_progress` — идет приемка
+- `delivering` — доставляется
+- `delivered` — доставлен
+- `cancelled` — отменен
+
+### Синк заказов из OZON
+`POST /api/ozon/postings/sync/`
+
+**body**
+```json
+{
+  "store_id": 1,
+  "status": "awaiting_packaging",
+  "since": "2025-12-22T00:00:00Z",
+  "to": "2025-12-23T23:59:59Z",
+  "limit": 1000,
+  "return_data": true
+}
+```
+
+Если `since/to` не переданы, берём **последние 3 месяца**.  
+Если передан только `since` — `to` = сейчас.  
+Если передан только `to` — `since` = `to - 3 месяца`.
+
+**ответ**
+```json
+{
+  "synced": 120,
+  "created": 15,
+  "updated": 105,
+  "postings": [ ... ]
+}
+```
+
+Если ключ устарел → **401**:
+```json
+{
+  "error": "Необходимо заменить API ключ",
+  "detail": "..."
+}
+```
+
+### Быстрый актуальный ответ для главной вкладки (awaiting_packaging)
+`POST /api/ozon/postings/refresh/`
+
+**Что делает**
+- Синхронизирует OZON по статусам `awaiting_packaging` и `awaiting_deliver`.
+- Возвращает список по выбранному статусу (по умолчанию `awaiting_packaging`) и сразу counts.
+
+**body**
+```json
+{
+  "store_id": 1,
+  "status": "awaiting_packaging",
+  "since": "2025-12-01T00:00:00Z",
+  "to": "2025-12-31T23:59:59Z",
+  "limit": 1000
+}
+```
+
+**ответ**
+```json
+{
+  "store_id": 1,
+  "status": "awaiting_packaging",
+  "count": 15,
+  "counts": {
+    "awaiting_packaging": 15,
+    "awaiting_deliver": 87,
+    "acceptance_in_progress": 3,
+    "delivering": 721,
+    "delivered": 0,
+    "cancelled": 0,
+    "unknown": 0
+  },
+  "total": 826,
+  "sync": {
+    "awaiting_packaging": { "synced": 120, "created": 15, "updated": 105 },
+    "awaiting_deliver": { "synced": 240, "created": 10, "updated": 230 }
+  },
+  "postings": [ ... ]
+}
+```
+
+### Получить список заказов из БД
+`GET /api/ozon/postings/?store_id=1&status=awaiting_packaging&needs_label=1&include_archived=1`
+
+**params**
+- `status` — можно несколько через запятую: `awaiting_packaging,awaiting_deliver`
+- `needs_label=1` — только те, что требуют печати
+- `include_archived=1` — включить архив (по умолчанию скрыт)
+- `force_refresh=1` — принудительный синк OZON перед ответом (для `awaiting_packaging/awaiting_deliver`)
+- `since`, `to` — интервал синка (если не переданы, используется 3 месяца)
+
+**ответ**
+```json
+{
+  "store_id": 1,
+  "status": "awaiting_packaging",
+  "count": 15,
+  "counts": { "awaiting_packaging": 15, "awaiting_deliver": 87, "delivering": 721, "delivered": 0, "cancelled": 0, "unknown": 0 },
+  "total": 826,
+  "postings": [ ... ]
+}
+```
+
+`counts` всегда возвращается с учетом архива (delivered/cancelled), чтобы табы были полными.
+
+Для `awaiting_packaging` и `awaiting_deliver` эндпоинт **автоматически** делает синк с OZON (с троттлингом).  
+Чтобы получить максимально актуально — используйте `force_refresh=1`.
+
+### Структура заказа (OzonFbsPosting)
+```json
+{
+  "id": 123,
+  "posting_number": "0120864608-0117-1",
+  "order_id": 32988888032,
+  "order_number": "0120864608-0117",
+  "status": "awaiting_deliver",
+  "substatus": "posting_in_carriage",
+
+  "delivery_method_id": 21800343131000,
+  "delivery_method_name": "Доставка Ozon самостоятельно, Санкт-Петербург",
+  "delivery_method_warehouse_id": 21800343131000,
+  "delivery_method_warehouse": "ABSwh",
+  "tpl_provider_id": 24,
+  "tpl_provider": "Доставка Ozon",
+  "tpl_integration_type": "ozon",
+
+  "tracking_number": "",
+  "in_process_at": "2025-12-24T00:26:48Z",
+  "shipment_date": "2025-12-24T18:30:00Z",
+  "delivering_date": null,
+
+  "status_changed_at": "2025-12-24T00:26:48Z",
+  "awaiting_packaging_at": "2025-12-24T00:00:00Z",
+  "awaiting_deliver_at": "2025-12-24T00:26:48Z",
+  "acceptance_in_progress_at": null,
+  "delivering_at": null,
+  "delivered_at": null,
+  "cancelled_at": null,
+  "archived_at": null,
+
+  "needs_label": true,
+  "labels_printed_at": null,
+  "print_count": 0,
+  "label_ready": true,
+  "label_status": "completed",
+  "label_file_url": "https://cdn1.ozone.ru/....pdf",
+  "label_file_path": "/workspace/backend/media/ozon/labels/1/0120864608-0117-1_5819_big_label.pdf",
+
+  "products": [ ... ],
+  "available_actions": [ ... ],
+  "cancellation": { ... },
+
+  "last_seen_at": "2025-12-24T00:26:48Z",
+  "last_synced_at": "2025-12-24T00:26:48Z",
+  "created_at": "2025-12-24T00:26:48Z",
+  "updated_at": "2025-12-24T00:26:48Z"
+}
+```
+
+### Количества по статусам (для табов)
+`GET /api/ozon/postings/counts/?store_id=1`
+
+**ответ**
+```json
+{
+  "store_id": 1,
+  "counts": {
+    "awaiting_packaging": 15,
+    "awaiting_deliver": 87,
+    "acceptance_in_progress": 3,
+    "delivering": 721,
+    "delivered": 0,
+    "cancelled": 0,
+    "unknown": 0
+  },
+  "total": 826
+}
+```
+
+### Печать (защита от дублей)
+`POST /api/ozon/postings/print/`
+
+**body**
+```json
+{
+  "store_id": 1,
+  "posting_numbers": ["0120864608-0117-1"],
+  "force": false
+}
+```
+
+Если уже печатали → **409**:
+```json
+{
+  "error": "already_printed",
+  "message": "Этот заказ уже был распечатан, вы уверены?",
+  "posting_numbers": ["0120864608-0117-1"]
+}
+```
+
+Повторная печать:
+```json
+{
+  "store_id": 1,
+  "posting_numbers": ["0120864608-0117-1"],
+  "force": true
+}
+```
+
+### Этикетки (awaiting_deliver)
+`POST /api/ozon/postings/labels/`
+
+**Как работает**
+- Для каждого `posting_number` создаётся отдельная задача в OZON.
+- Если этикетка уже есть в БД, OZON не дергается.
+- Возвращается **один PDF**, где 1 этикетка = 1 страница.
+- В PDF добавляется подпись `Кол-во товара: N шт.`.
+
+**body**
+```json
+{
+  "store_id": 1,
+  "posting_numbers": ["0120864608-0117-1", "0120864608-0118-1"],
+  "label_type": "big_label",
+  "wait_seconds": 2
+}
+```
+
+**ответы**
+- Если все этикетки готовы → возвращается PDF.
+- Если часть ещё в обработке → **202**:
+```json
+{
+  "status": "pending",
+  "ready": ["0120864608-0117-1"],
+  "pending": ["0120864608-0118-1"],
+  "errors": []
+}
+```
+
+**важно**
+- Этикетки формируются только для `awaiting_deliver`.
+- `label_type` по умолчанию `big_label` (доступно `small_label`).
+- Перед формированием этикеток бэк **сам** обновляет статус `awaiting_deliver` из OZON.
+
+### Экспорт CSV
+`GET /api/ozon/postings/export/?store_id=1`
+
+Колонки:
+- `posting_number`
+- `awaiting_packaging_at`
+- `awaiting_deliver_at`
+- `acceptance_in_progress_at`
+- `delivering_at`
+- `delivered_at`
+- `cancelled_at`
+
+### Сводка для бота/дашборда
+`GET /api/ozon/postings/summary/?store_id=1&period_days=1&avg_days=14&risk_days=2`
+
+**ответ**
+```json
+{
+  "delivering_count": 12,
+  "total_active_count": 84,
+  "not_delivered_count": 9,
+  "not_delivered_postings": ["..."],
+  "avg_deliver_hours": 36.5,
+  "risk_postings": ["..."],
+  "risk_days": 2
+}
+```
+
+### Настройки бота (сортировка PDF)
+`GET /api/ozon/bot/settings/?store_id=1`
+
+`POST /api/ozon/bot/settings/?store_id=1`
+```json
+{
+  "pdf_sort_mode": "offer_id",
+  "pdf_sort_ascending": true
+}
+```
+
+### Рекомендованный флоу на фронте
+1. Открыли вкладку “Ожидают сборки” → `POST /api/ozon/postings/sync/` со статусом `awaiting_packaging`.
+2. Читаем список через `GET /api/ozon/postings/?store_id=...&status=awaiting_packaging`.
+3. Аналогично для остальных вкладок: `awaiting_deliver`, `acceptance_in_progress`, `delivering`.
+4. Подсветка новых к печати — `needs_label=true` (ставится при переходе в `awaiting_deliver`).
+5. Печать → `POST /api/ozon/postings/print/`. При дубле фронт подтверждает повтор (force=true).
+6. Архивные (delivering/delivered/cancelled) скрыты по умолчанию, показываются по `include_archived=1`.
+По умолчанию **включает архивные** (delivered/cancelled). Если нужны только активные — добавьте `include_archived=0`.
