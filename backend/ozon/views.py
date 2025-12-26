@@ -120,7 +120,10 @@ POSTING_STATUS_FIELDS = {
     OzonFbsPosting.STATUS_CANCELLED: "cancelled_at",
 }
 
+# Минимальный интервал между синками ключевых статусов (в секундах).
 AUTO_SYNC_MIN_SECONDS = 30
+# Минимальный интервал для фонового синка delivering/delivered/cancelled (в секундах).
+BACKGROUND_SYNC_MIN_SECONDS = 600
 
 
 def _sync_cache_key(store_id, status):
@@ -143,12 +146,13 @@ def _set_last_sync_time(store_id, status, sync_time):
     cache.set(key, sync_time.timestamp(), timeout=3600)
 
 
-def _should_sync(store_id, status):
+def _should_sync(store_id, status, min_seconds=None):
     # FBS: решает, можно ли запускать синк по таймауту.
     last = _get_last_sync_time(store_id, status)
     if not last:
         return True
-    return (timezone.now() - last).total_seconds() >= AUTO_SYNC_MIN_SECONDS
+    threshold = min_seconds if min_seconds is not None else AUTO_SYNC_MIN_SECONDS
+    return (timezone.now() - last).total_seconds() >= threshold
 
 
 def _sync_bg_lock_key(store_id):
@@ -326,7 +330,7 @@ def _background_sync_statuses(store_id, statuses, since_str, to_str, limit):
 
     try:
         for status_value in statuses:
-            if not _should_sync(store_id, status_value):
+            if not _should_sync(store_id, status_value, min_seconds=BACKGROUND_SYNC_MIN_SECONDS):
                 continue
             try:
                 result = _sync_fbs_postings_for_status(
@@ -3409,13 +3413,17 @@ class FbsPostingRefreshView(APIView):
             return Response({"error": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
 
         background_started = False
-        if _acquire_bg_sync_lock(store.id):
+        bg_statuses = [
+            OzonFbsPosting.STATUS_DELIVERING,
+            OzonFbsPosting.STATUS_DELIVERED,
+            OzonFbsPosting.STATUS_CANCELLED,
+        ]
+        needs_background_sync = any(
+            _should_sync(store.id, status_value, min_seconds=BACKGROUND_SYNC_MIN_SECONDS)
+            for status_value in bg_statuses
+        )
+        if needs_background_sync and _acquire_bg_sync_lock(store.id):
             background_started = True
-            bg_statuses = [
-                OzonFbsPosting.STATUS_DELIVERING,
-                OzonFbsPosting.STATUS_DELIVERED,
-                OzonFbsPosting.STATUS_CANCELLED,
-            ]
             threading.Thread(
                 target=_background_sync_statuses,
                 args=(store.id, bg_statuses, since_str, to_str, limit),
@@ -3446,11 +3454,7 @@ class FbsPostingRefreshView(APIView):
                 "sync": sync_results,
                 "background_sync": {
                     "started": background_started,
-                    "statuses": [
-                        OzonFbsPosting.STATUS_DELIVERING,
-                        OzonFbsPosting.STATUS_DELIVERED,
-                        OzonFbsPosting.STATUS_CANCELLED,
-                    ],
+                    "statuses": bg_statuses,
                 },
                 "postings": postings,
             },
