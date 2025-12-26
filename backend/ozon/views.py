@@ -381,6 +381,7 @@ def _resolve_label_font_path():
     if env_path and os.path.exists(env_path):
         return env_path
     candidates = [
+        os.path.join(settings.BASE_DIR.parent, "fonts", "DejaVuSans.ttf"),
         os.path.join(settings.BASE_DIR, "fonts", "DejaVuSans.ttf"),
         os.path.join(settings.BASE_DIR.parent, "posting_bot", "code", "app", "Inter.ttf"),
         os.path.join(settings.BASE_DIR, "Inter.ttf"),
