@@ -5,6 +5,8 @@ import requests
 import ssl
 from pprint import pprint
 import os
+import time
+from telebot import apihelper
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -17,6 +19,18 @@ url = os.environ.get("API_URL")
 access_api = "792049e29b622a24a4fa86958d487d3d43306eec796d1b56739db393e221e1f1"
 url_BotInit = f"{url}/auth/4bBFJCoiYnhFjbz3awRJ5LorPYLVtUNy/"
 print(url_BotInit)
+
+tg_proxy = os.environ.get("TELEGRAM_PROXY")
+if tg_proxy:
+    apihelper.proxy = {"https": tg_proxy, "http": tg_proxy}
+
+tg_api_url = os.environ.get("TELEGRAM_API_URL")
+if tg_api_url:
+    apihelper.API_URL = tg_api_url.rstrip("/") + "/bot{0}/{1}"
+
+apihelper.RETRY_ON_ERROR = True
+apihelper.CONNECT_TIMEOUT = int(os.environ.get("TG_CONNECT_TIMEOUT", "10"))
+apihelper.READ_TIMEOUT = int(os.environ.get("TG_READ_TIMEOUT", "20"))
 
 SESSION = requests.Session()
 RETRY = Retry(
@@ -165,4 +179,13 @@ def admin_auth(message):
         bot.reply_to(message, "❌ Произошла ошибка. Попробуйте еще раз.")
         
 if __name__ == '__main__':
-    bot.polling(none_stop=True)
+    while True:
+        try:
+            bot.infinity_polling(
+                timeout=apihelper.READ_TIMEOUT,
+                long_polling_timeout=apihelper.READ_TIMEOUT,
+                skip_pending=True,
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"Polling error: {e}")
+            time.sleep(5)
