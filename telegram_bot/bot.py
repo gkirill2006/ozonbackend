@@ -5,6 +5,8 @@ import requests
 import ssl
 from pprint import pprint
 import os
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 print("START TG BOT")
 api_key_bot = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -15,6 +17,24 @@ url = os.environ.get("API_URL")
 access_api = "792049e29b622a24a4fa86958d487d3d43306eec796d1b56739db393e221e1f1"
 url_BotInit = f"{url}/auth/4bBFJCoiYnhFjbz3awRJ5LorPYLVtUNy/"
 print(url_BotInit)
+
+SESSION = requests.Session()
+RETRY = Retry(
+    total=3,
+    connect=3,
+    read=3,
+    backoff_factor=0.5,
+    status_forcelist=(429, 500, 502, 503, 504),
+    allowed_methods=("GET", "POST"),
+)
+ADAPTER = HTTPAdapter(max_retries=RETRY)
+SESSION.mount("http://", ADAPTER)
+SESSION.mount("https://", ADAPTER)
+
+
+def api_request(method, target_url, **kwargs):
+    timeout = kwargs.pop("timeout", 20)
+    return SESSION.request(method, target_url, timeout=timeout, **kwargs)
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     
@@ -55,7 +75,7 @@ def send_welcome(message):
             }
             try:
                 print("Попадаем в чекпоинт 1")
-                response = requests.request("POST", url_BotInit, headers=headers, data=payload)
+                response = api_request("POST", url_BotInit, headers=headers, data=payload)
                 print(f"Response status: {response.status_code}")
                 print(f"Response content: {response.text}")
                 
@@ -80,7 +100,7 @@ def send_welcome(message):
                 'Api-Key': access_api
             }
             try:
-                response = requests.request("POST", url_BotInit, headers=headers, data=payload)
+                response = api_request("POST", url_BotInit, headers=headers, data=payload)
                 print(response)
                 # mess = "Вы успешно авторизовались, теперь можно вернуться обратно на сайт"
             except Exception as e:
@@ -115,7 +135,7 @@ def admin_auth(message):
     
     try:
         # Создаем пользователя
-        user_response = requests.post(url_BotInit, headers=headers, data=user_payload)
+        user_response = api_request("POST", url_BotInit, headers=headers, data=user_payload)
         if user_response.status_code == 200:
             user_data = user_response.json()
             user_id = user_data.get('user_id') or user_data.get('id')
@@ -126,8 +146,12 @@ def admin_auth(message):
                 "user_id": user_id
             })
             
-            cache_response = requests.post(f"{url}/auth/cache-session/", 
-                                        headers=headers, data=cache_payload)
+            cache_response = api_request(
+                "POST",
+                f"{url}/auth/cache-session/",
+                headers=headers,
+                data=cache_payload,
+            )
             
             if cache_response.status_code == 200:
                 bot.reply_to(message, "✅ Авторизация успешна! Теперь можете вернуться в админ-панель.")
