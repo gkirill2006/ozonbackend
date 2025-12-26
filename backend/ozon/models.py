@@ -268,6 +268,18 @@ class OzonFbsPosting(models.Model):
             models.Index(fields=["store", "status"]),
             models.Index(fields=["store", "posting_number"]),
             models.Index(fields=["status", "archived_at"]),
+            models.Index(
+                fields=["store", "status", "archived_at"],
+                name="ozon_fbs_store_status_arch_idx",
+            ),
+            models.Index(
+                fields=["store", "status", "last_seen_at"],
+                name="ozon_fbs_store_status_seen_idx",
+            ),
+            models.Index(
+                fields=["store", "needs_label"],
+                name="ozon_fbs_store_label_idx",
+            ),
         ]
         verbose_name = "FBS posting"
         verbose_name_plural = "FBS postings"

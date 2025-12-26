@@ -49,7 +49,7 @@ from .serializers import (
     FbsPostingLabelsSerializer,
 )
 import time
-from django.db.models import Sum, F, Count, Q
+from django.db.models import Sum, F, Count, Q, Prefetch
 from datetime import datetime, timedelta
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -3270,7 +3270,12 @@ class FbsPostingListView(generics.ListAPIView):
             return OzonFbsPosting.objects.none()
 
         store = get_object_or_404(user_store_queryset(self.request.user), id=store_id)
-        qs = OzonFbsPosting.objects.filter(store=store).prefetch_related("labels")
+        label_type = self.request.query_params.get("label_type") or OzonFbsPostingLabel.TASK_TYPE_BIG
+        self._label_type = label_type
+        labels_qs = OzonFbsPostingLabel.objects.filter(task_type=label_type).order_by("-updated_at")
+        qs = OzonFbsPosting.objects.filter(store=store).prefetch_related(
+            Prefetch("labels", queryset=labels_qs, to_attr="prefetched_labels")
+        )
         status_param = self.request.query_params.get("status")
         if status_param:
             statuses = [s.strip() for s in status_param.split(",") if s.strip()]
@@ -3317,30 +3322,54 @@ class FbsPostingListView(generics.ListAPIView):
         return qs.order_by("-status_changed_at", "-updated_at")
 
     def list(self, request, *args, **kwargs):
+        start_ts = time.perf_counter()
         queryset = self.filter_queryset(self.get_queryset())
-        label_type = request.query_params.get("label_type") or OzonFbsPostingLabel.TASK_TYPE_BIG
+        qs_sec = time.perf_counter() - start_ts
+        label_type = getattr(self, "_label_type", None) or request.query_params.get(
+            "label_type"
+        ) or OzonFbsPostingLabel.TASK_TYPE_BIG
+        serialize_start = time.perf_counter()
         serializer = self.get_serializer(
             queryset,
             many=True,
             context={"label_type": label_type},
         )
+        postings_data = serializer.data
+        serialize_sec = time.perf_counter() - serialize_start
 
         store_id = request.query_params.get("store_id")
         status_param = request.query_params.get("status") or ""
         counts = None
         total = None
+        counts_start = time.perf_counter()
         if store_id:
             store = get_object_or_404(user_store_queryset(request.user), id=store_id)
             counts, total = _get_posting_counts(store, include_archived=True)
+        counts_sec = time.perf_counter() - counts_start
+        count_start = time.perf_counter()
+        queryset_count = queryset.count()
+        count_sec = time.perf_counter() - count_start
+        total_sec = time.perf_counter() - start_ts
+        logging.info(
+            "FBS postings list timing store=%s status=%s qs_sec=%.4f serialize_sec=%.4f counts_sec=%.4f count_sec=%.4f total_sec=%.4f items=%s",
+            store_id,
+            status_param,
+            qs_sec,
+            serialize_sec,
+            counts_sec,
+            count_sec,
+            total_sec,
+            len(postings_data),
+        )
 
         return Response(
             {
                 "store_id": int(store_id) if store_id else None,
                 "status": status_param,
-                "count": queryset.count(),
+                "count": queryset_count,
                 "counts": counts or {},
                 "total": total or 0,
-                "postings": serializer.data,
+                "postings": postings_data,
             },
             status=status.HTTP_200_OK,
         )

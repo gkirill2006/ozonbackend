@@ -181,6 +181,9 @@ class FbsPostingSerializer(serializers.ModelSerializer):
 
     def _get_label(self, obj):
         label_type = self.context.get("label_type") or OzonFbsPostingLabel.TASK_TYPE_BIG
+        prefetched = getattr(obj, "prefetched_labels", None)
+        if prefetched is not None:
+            return prefetched[0] if prefetched else None
         return (
             obj.labels.filter(task_type=label_type)
             .order_by("-updated_at")
