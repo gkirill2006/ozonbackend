@@ -377,9 +377,16 @@ def _fetch_label_task_status(store, task_id):
 
 # FBS: ищет шрифт для подписи на этикетке.
 def _resolve_label_font_path():    
+    env_path = os.getenv("LABEL_FONT_PATH")
+    if env_path and os.path.exists(env_path):
+        return env_path
     candidates = [
         os.path.join(settings.BASE_DIR.parent, "posting_bot", "code", "app", "Inter.ttf"),
         os.path.join(settings.BASE_DIR, "Inter.ttf"),
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
     ]
     for path in candidates:
         if os.path.exists(path):
@@ -389,7 +396,13 @@ def _resolve_label_font_path():
 # FBS: добавляет подпись количества товаров в PDF этикетки.
 def _annotate_label_pdf(input_pdf, output_pdf, posting_number, quantity, font_path, extra_width=25):    
     doc = fitz.open(input_pdf)
-    font = fitz.Font(fontfile=font_path) if font_path else None
+    font = None
+    if font_path:
+        try:
+            font = fitz.Font(fontfile=font_path)
+        except Exception as exc:
+            logging.warning("FBS label font load failed: %s", exc)
+            font = None
     found = False
     for page in doc:
         if posting_number in (page.get_text() or ""):
@@ -425,12 +438,14 @@ def _append_quantity_label(page, quantity, font, extra_width):
     if font:
         page.insert_font(fontname="F0", fontbuffer=font.buffer)
         fontname = "F0"
+        label_text = f"Кол-во товара: {quantity} шт."
     else:
         fontname = "helv"
+        label_text = f"Qty: {quantity}"
 
     page.insert_textbox(
         rect=text_rect,
-        buffer=f"Кол-во товара: {quantity} шт.",
+        buffer=label_text,
         fontname=fontname,
         fontsize=16,
         rotate=270,
