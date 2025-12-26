@@ -379,6 +379,7 @@ def _fetch_label_task_status(store, task_id):
 def _resolve_label_font_path():    
     env_path = os.getenv("LABEL_FONT_PATH")
     if env_path and os.path.exists(env_path):
+        logging.info("FBS label font resolved from env: %s", env_path)
         return env_path
     candidates = [
         os.path.join(settings.BASE_DIR.parent, "fonts", "DejaVuSans.ttf"),
@@ -392,7 +393,9 @@ def _resolve_label_font_path():
     ]
     for path in candidates:
         if os.path.exists(path):
+            logging.info("FBS label font resolved: %s", path)
             return path
+    logging.warning("FBS label font not found")
     return None
 
 # FBS: добавляет подпись количества товаров в PDF этикетки.
